@@ -1,0 +1,37 @@
+- insert:
+    - id: tool-media-generation
+      name: dsh-media-generation
+      config:
+        timeoutMs: 60000
+        maxImageBytes: 20971520
+        imageProviders:
+          # Any provider using the OpenAI Images request/response shape can be
+          # added here. The key is stored outside cordis.patch.yml.
+          - id: openai-image
+            endpoint: https://api.openai.com/v1/images/generations
+            model: gpt-image-2.5-flare
+            apiKeyEnv: OPENAI_API_KEY
+            imageBase64Path: data.0.b64_json
+            imageMimeType: image/png
+          # You can add more image provider entries with different IDs,
+          # endpoints, models, and credential references.
+        videoProviders:
+          # Generic asynchronous JSON task API. Request and response paths are
+          # configurable so multiple compatible providers can coexist.
+          - id: ark-seedance
+            endpoint: https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks
+            statusEndpointTemplate: https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks/{taskId}
+            model: doubao-seedance-2-0-260128
+            apiKeyEnv: ARK_API_KEY
+            requestBody:
+              model: '{{model}}'
+              content:
+                - type: text
+                  text: '{{prompt}}'
+              duration: '{{duration}}'
+              ratio: '{{ratio}}'
+              resolution: '{{resolution}}'
+            taskIdPath: id
+            statusPath: status
+            videoUrlPath: content.video_url
+            errorPath: error.message
