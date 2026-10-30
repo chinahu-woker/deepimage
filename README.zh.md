@@ -61,4 +61,4 @@ DeepSeek Harness 处于 developer preview，发布前应在目标 DSH 版本上�
 
 ## 插件更新
 
-在「设置 → deepImage → 插件更新」中检查并安装当前版本的更新。私有仓库需要先保存具备该仓库 Contents 只读权限的 GitHub Token。更新包从对应版本的 GitHub Release 下载，并验证 SHA-256；源码链接需要通过更新源码的方式维护。
+在「设置 → deepImage → 插件更新」中检查并安装当前版本的更新。公开仓库的更新无需 GitHub Token。更新包从对应版本的 GitHub Release 下载，并验证 SHA-256；源码链接需要通过更新源码的方式维护。
