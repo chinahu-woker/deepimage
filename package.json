@@ -1,6 +1,6 @@
 {
   "name": "dsh-media-generation",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Configurable image and video generation tools for DeepSeek Harness",
   "type": "module",
   "main": "./src/index.js",
@@ -26,7 +26,7 @@
     "pack:plugin": "npm pack --pack-destination dist"
   },
   "engines": {
-    "dsh": ">=0.2.1-alpha.2 <0.3.0"
+    "dsh": ">=0.2.1-rc.5 <0.3.0"
   },
   "dsh": {
     "bundle": {

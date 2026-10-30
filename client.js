@@ -31,7 +31,39 @@ window.__ModuleLoader__.load({
 
     const withNewApiLock = action => navigator.locks ? navigator.locks.request('deepimage-newapi-account', action) : action()
 
-    async function configureNewApi(bundle, form, credentials) {
+    const chatRoutes = [
+      { id: 'chat', endpoint: 'openai', api: 'openai-completions', displayName: 'AIKNA' },
+      { id: 'responses', endpoint: 'openai-response', api: 'openai-responses', displayName: 'AIKNA · Responses' },
+    ]
+    const chatRouteId = (userId, kind) => `deepimage-newapi-${userId}-${kind}`
+    function managedChatRoute(profile) {
+      return profile && profile.baseURL === `${newApiBase}/v1` && /^DEEPIMAGE_NEWAPI_[1-9]\d*$/.test(profile.apiKeyEnv || '')
+    }
+    async function writeChatRoutes(modelForm, userId, eligible, remove = false) {
+      const snapshot = modelForm.getSnapshot()
+      if (snapshot.status !== 'ready' || !snapshot.writable) throw new Error('对话模型配置暂不可写，请稍后重试。')
+      const providers = snapshot.value?.providers || {}
+      const ops = []
+      let count = 0
+      for (const route of chatRoutes) {
+        const id = chatRouteId(userId, route.id)
+        const existing = providers[id]
+        if (remove && existing && !managedChatRoute(existing)) continue
+        if (existing && !managedChatRoute(existing)) throw new Error(`对话模型服务商 ${id} 已被占用，请先更换其名称。`)
+        if (remove && existing?.apiKeyEnv !== `DEEPIMAGE_NEWAPI_${userId}`) continue
+        const list = remove ? [] : eligible.filter(item => item.supported_endpoint_types.includes(route.endpoint) && (route.endpoint !== 'openai-response' || !item.supported_endpoint_types.includes('openai')))
+        if (list.length) {
+          const seen = new Set()
+          const models = list.filter(item => !seen.has(item.model_name) && seen.add(item.model_name)).map(item => ({ id: item.model_name }))
+          count += models.length
+          ops.push({ op: 'set', path: ['providers', id], value: { displayName: route.displayName, apiKeyEnv: `DEEPIMAGE_NEWAPI_${userId}`, baseURL: `${newApiBase}/v1`, api: route.api, defaultContextWindow: 32768, defaultMaxTokens: 4096, models } })
+        } else if (existing) ops.push({ op: 'unset', path: ['providers', id] })
+      }
+      if (ops.length && !await modelForm.mutate(ops, snapshot.revision)) throw new Error('对话模型配置未保存，可能已被其他页面修改，请重试。')
+      return count
+    }
+
+    async function loadNewApiCatalog(bundle) {
       const token = bundle?.access_token
       const userId = bundle?.user?.id
       if (typeof token !== 'string' || !Number.isSafeInteger(userId) || userId <= 0) throw new Error('登录响应不完整，请检查 New API 版本。')
@@ -57,27 +89,31 @@ window.__ModuleLoader__.load({
       if (!Array.isArray(models.data)) throw new Error('无法读取 API 密钥可用的模型。')
       const allowed = new Set(models.data.map(item => item.id).filter(id => typeof id === 'string'))
       const eligible = pricing.data.filter(item => allowed.has(item.model_name) && Array.isArray(item.supported_endpoint_types))
+      return { userId, token, key, eligible }
+    }
+
+    async function configureNewApi(bundle, form, credentials, modelForm) {
+      const { userId, token, key, eligible } = await loadNewApiCatalog(bundle)
       const ref = `DEEPIMAGE_NEWAPI_${userId}`
       const prefix = `newapi:${userId}:`
       const imageModels = eligible.filter(item => item.supported_endpoint_types.includes('image-generation'))
       const videoModels = eligible.filter(item => item.supported_endpoint_types.includes('openai-video'))
-      if (!imageModels.length && !videoModels.length) throw new Error('该密钥没有可识别的兼容图片或视频模型。请检查 New API 的模型和分组配置。')
+      const chatModels = eligible.filter(item => item.supported_endpoint_types.includes('openai') || item.supported_endpoint_types.includes('openai-response'))
+      if (!imageModels.length && !videoModels.length && !chatModels.length) throw new Error('该密钥没有可识别的兼容对话、图片或视频模型。请检查 New API 的模型和分组配置。')
       const snapshot = form.getSnapshot()
       if (snapshot.status !== 'ready' || !snapshot.writable) throw new Error('当前配置不可写，请稍后重试。')
       const current = snapshot.value || {}
       const imageProviders = (current.imageProviders || []).filter(item => !item.id.startsWith(prefix))
       const videoProviders = (current.videoProviders || []).filter(item => !item.id.startsWith(prefix))
-      const priorTimeout = (list, id) => {
-        const timeoutMs = (list || []).find(provider => provider.id === id)?.timeoutMs
-        return Number.isInteger(timeoutMs) && timeoutMs > 0 ? { timeoutMs } : {}
-      }
       for (const item of imageModels) {
         const id = `${prefix}image:${item.model_name}`
-        imageProviders.push({ ...defaults('image'), id, endpoint: `${newApiBase}/v1/images/generations`, model: item.model_name, apiKeyEnv: ref, ...priorTimeout(current.imageProviders, id) })
+        const previous = (current.imageProviders || []).find(provider => provider.id === id)
+        imageProviders.push({ ...defaults('image'), endpoint: `${newApiBase}/v1/images/generations`, ...previous, id, model: item.model_name, apiKeyEnv: ref })
       }
       for (const item of videoModels) {
         const id = `${prefix}video:${item.model_name}`
-        videoProviders.push({ ...defaults('video'), id, endpoint: `${newApiBase}/v1/videos`, statusEndpointTemplate: `${newApiBase}/v1/videos/{taskId}`, model: item.model_name, apiKeyEnv: ref, protocol: 'newapi-video', taskIdPath: 'id', statusPath: 'status', successStatuses: ['completed'], failureStatuses: ['failed', 'cancelled', 'expired'], ...priorTimeout(current.videoProviders, id) })
+        const previous = (current.videoProviders || []).find(provider => provider.id === id)
+        videoProviders.push({ ...defaults('video'), endpoint: `${newApiBase}/v1/videos`, statusEndpointTemplate: `${newApiBase}/v1/videos/{taskId}`, protocol: 'newapi-video', taskIdPath: 'id', statusPath: 'status', successStatuses: ['completed'], failureStatuses: ['failed', 'cancelled', 'expired'], ...previous, id, model: item.model_name, apiKeyEnv: ref })
       }
       const saved = await credentials.set(ref, key)
       if (!saved.ok) throw new Error(saved.error?.message || 'API 密钥保存失败。')
@@ -88,11 +124,57 @@ window.__ModuleLoader__.load({
       const defaultImage = oldDefaultProvider && (!ownerId || ownerId === String(userId)) && (!credentialOwner || credentialOwner === String(userId)) ? oldDefault : imageModels.length ? `${prefix}image:${imageModels[0].model_name}` : ''
       const [selfResult, statusResult] = await Promise.allSettled([newApiRequest('/api/user/self', { token }), newApiRequest('/api/status')])
       const self = selfResult.status === 'fulfilled' && selfResult.value.data?.id === userId ? selfResult.value.data : bundle.user
-      const account = newApiAccount(self, statusResult.status === 'fulfilled' ? statusResult.value.data : null)
+      const modelSnapshot = modelForm.getSnapshot()
+      const oldAccount = current.newApiAccount
+      const switching = oldAccount?.id && oldAccount.id !== userId
+      if (switching && (oldAccount.chatRoutesManaged || oldAccount.chatSyncVersion === 1) && (modelSnapshot.status !== 'ready' || !modelSnapshot.writable)) throw new Error('切换账户前无法安全更新对话模型，请检查模型配置后重试。')
+      const removedRoutes = []
+      if (modelSnapshot.status === 'ready' && modelSnapshot.writable) {
+        const providers = modelSnapshot.value?.providers || {}
+        for (const [route, profile] of Object.entries(providers)) {
+          if (/^deepimage-newapi-[1-9]\d*-(?:chat|responses)$/.test(route) && managedChatRoute(profile) && profile.apiKeyEnv !== ref) removedRoutes.push({ route, profile })
+        }
+        if (removedRoutes.length && !await modelForm.mutate(removedRoutes.map(item => ({ op: 'unset', path: ['providers', item.route] })), modelSnapshot.revision)) throw new Error('无法安全切换对话模型，请重试。')
+      }
+      const account = { ...newApiAccount(self, statusResult.status === 'fulfilled' ? statusResult.value.data : null), chatSyncVersion: 0, chatRoutesManaged: oldAccount?.id === userId && (!!oldAccount.chatRoutesManaged || oldAccount.chatSyncVersion === 1) }
       const ok = await form.mutate([{ op: 'set', path: ['imageProviders'], value: imageProviders }, { op: 'set', path: ['videoProviders'], value: videoProviders }, { op: 'set', path: ['defaultImageProvider'], value: defaultImage }, { op: 'set', path: ['newApiAccount'], value: account }], snapshot.revision)
-      if (!ok) throw new Error('配置未保存，可能已被其他页面修改。请重新登录以重试。')
+      if (!ok) {
+        const latest = form.getSnapshot()
+        const routeSnapshot = modelForm.getSnapshot()
+        if (removedRoutes.length && latest.value?.newApiAccount?.id === oldAccount?.id && routeSnapshot.status === 'ready' && routeSnapshot.writable) {
+          const vacant = removedRoutes.filter(item => !routeSnapshot.value?.providers?.[item.route])
+          if (vacant.length) await modelForm.mutate(vacant.map(item => ({ op: 'set', path: ['providers', item.route], value: item.profile })), routeSnapshot.revision)
+        }
+        throw new Error('配置未保存，可能已被其他页面修改。请重新登录以重试。')
+      }
       newApiSession = { token, id: userId, expiresAt: bundle.access_expires_at * 1000 }
-      return { images: imageModels.length, videos: videoModels.length }
+      let chats = 0, chatError = ''
+      try {
+        chats = await syncExistingChat({ access_token: token, access_expires_at: bundle.access_expires_at, user: self }, form, credentials, modelForm, { userId, key, eligible })
+      } catch (error) { chatError = error.message || '对话模型同步失败，请稍后重试。' }
+      return { chats, images: imageModels.length, videos: videoModels.length, chatError }
+    }
+
+    async function syncExistingChat(bundle, form, credentials, modelForm, catalog) {
+      const { userId, key, eligible } = catalog || await loadNewApiCatalog(bundle)
+      const before = form.getSnapshot()
+      if (before.value?.newApiAccount?.id !== userId) throw new Error('当前账户已更换，请重新同步。')
+      const modelState = modelForm.getSnapshot()
+      if (modelState.status !== 'ready' || !modelState.writable) throw new Error('对话模型配置暂不可写，请稍后重试。')
+      if (!before.value.newApiAccount.chatRoutesManaged) {
+        if (!await form.mutate([{ op: 'set', path: ['newApiAccount'], value: { ...before.value.newApiAccount, chatRoutesManaged: true } }], before.revision)) throw new Error('对话模型同步状态未保存，请重试。')
+      }
+      const saved = await credentials.set(`DEEPIMAGE_NEWAPI_${userId}`, key)
+      if (!saved.ok) throw new Error(saved.error?.message || 'API 密钥保存失败。')
+      if (form.getSnapshot().value?.newApiAccount?.id !== userId) throw new Error('当前账户已更换，请重新同步。')
+      const chats = await writeChatRoutes(modelForm, userId, eligible)
+      const latest = form.getSnapshot()
+      if (latest.value?.newApiAccount?.id !== userId) {
+        await writeChatRoutes(modelForm, userId, [], true)
+        throw new Error('当前账户已更换，请重新同步。')
+      }
+      if (!await form.mutate([{ op: 'set', path: ['newApiAccount'], value: { ...latest.value.newApiAccount, chatSyncVersion: 1 } }], latest.revision)) throw new Error('对话模型同步状态未保存，请重试。')
+      return chats
     }
 
     function newApiAccount(user, status) {
@@ -121,13 +203,14 @@ window.__ModuleLoader__.load({
       return `${symbol}${new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(account.quota / account.quotaPerUnit * rate)}`
     }
 
-    function NewApiLogin({ form, credentials, account, onBusyChange, editing, setEditing }) {
+    function NewApiLogin({ form, credentials, modelForm, modelReady, account, onBusyChange, editing, setEditing }) {
       const [username, setUsername] = React.useState('')
       const [password, setPassword] = React.useState('')
       const [code, setCode] = React.useState('')
       const [challenge, setChallenge] = React.useState(null)
       const [busy, setBusy] = React.useState(false)
       const busyRef = React.useRef(false)
+      const retryAccount = React.useRef(null)
       const setAccountBusy = value => { setBusy(value); onBusyChange(value) }
       const [message, setMessage] = React.useState('')
       const [sessionExpired, setSessionExpired] = React.useState(null)
@@ -147,15 +230,15 @@ window.__ModuleLoader__.load({
             setChallenge(response.data)
           } else {
             setChallenge(null)
-            const result = await configureNewApi(response.data, form, credentials)
+            const result = await configureNewApi(response.data, form, credentials, modelForm)
             setEditing(false)
             setSessionExpired(false)
-            setMessage(`连接成功：已配置 ${result.images} 个图片模型和 ${result.videos} 个视频模型。`)
+            setMessage(result.chatError ? `连接成功，图片和视频模型已配置；对话模型同步失败：${result.chatError}` : `连接成功：已同步 ${result.chats} 个对话模型、${result.images} 个图片模型和 ${result.videos} 个视频模型。`)
           }
           })
         } catch (error) { setMessage(error.message || '连接失败，请稍后重试。') } finally { busyRef.current = false; setAccountBusy(false) }
       }
-      const refresh = async () => {
+      const refresh = async (forceSync = false) => {
         if (busyRef.current) return
         busyRef.current = true; setAccountBusy(true); setMessage('')
         try {
@@ -171,9 +254,13 @@ window.__ModuleLoader__.load({
           if (self.data?.id !== account.id) throw new Error('账户信息已变化，请重新登录。')
           const snapshot = form.getSnapshot()
           if (snapshot.value?.newApiAccount?.id !== account.id) throw new Error('当前登录会话已更换，请刷新页面。')
-          const ok = await form.mutate([{ op: 'set', path: ['newApiAccount'], value: newApiAccount(self.data, status.data) }], snapshot.revision)
+          const ok = await form.mutate([{ op: 'set', path: ['newApiAccount'], value: { ...newApiAccount(self.data, status.data), chatSyncVersion: snapshot.value.newApiAccount.chatSyncVersion || 0, chatRoutesManaged: !!snapshot.value.newApiAccount.chatRoutesManaged } }], snapshot.revision)
           if (!ok) throw new Error('余额未更新，请重试。')
           setSessionExpired(false)
+          if (forceSync || account.chatSyncVersion !== 1) {
+            const chats = await syncExistingChat({ access_token: activeSession.token, access_expires_at: activeSession.expiresAt / 1000, user: self.data }, form, credentials, modelForm)
+            setMessage(`已同步 ${chats} 个对话模型。`)
+          }
           })
         } catch (error) {
           if (/登录会话.*(?:重新登录|失效|无效)/.test(error.message || '')) setSessionExpired(true)
@@ -188,6 +275,10 @@ window.__ModuleLoader__.load({
         try {
           await withNewApiLock(async () => {
           await newApiRequest('/api/user/auth/logout', { body: { userId: account.id } })
+          let routeError = ''
+          const currentAccount = form.getSnapshot().value?.newApiAccount
+          try { await writeChatRoutes(modelForm, account.id, [], true) } catch (error) { if (currentAccount?.chatRoutesManaged || currentAccount?.chatSyncVersion === 1) routeError = error.message || '对话模型配置未移除。' }
+          if (routeError) throw new Error(`会话已退出，但${routeError} 请再次点击退出登录。`)
           newApiSession = null
           setSessionExpired(true)
           let saved = false
@@ -200,7 +291,7 @@ window.__ModuleLoader__.load({
           }
           if (!saved) throw new Error('会话已退出，但配置未保存，请再次点击退出登录。')
           setEditing(false); setChallenge(null); setPassword(''); setCode(''); setSessionExpired(false)
-          setMessage('已退出登录。')
+          setMessage(routeError ? `已退出登录；${routeError}` : '已退出登录。')
           })
         } catch (error) { newApiSession = null; setSessionExpired(true); setMessage(error.message || '退出登录失败，请稍后重试。') }
         finally { busyRef.current = false; setAccountBusy(false) }
@@ -208,6 +299,12 @@ window.__ModuleLoader__.load({
       const icon = (label, paths, onClick) => h('button', { type: 'button', className: 'media-account-icon', disabled: busy || (label === '退出登录' && !form.getSnapshot().writable), onClick, title: label, 'aria-label': label },
         h('svg', { viewBox: '0 0 24 24', width: 18, height: 18, fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, ...paths.map((d, index) => h('path', { d, key: index }))))
       React.useEffect(() => { if (account?.id) void refresh() }, [account?.id])
+      React.useEffect(() => {
+        if (account?.id && account.chatSyncVersion !== 1 && modelReady && !busy && !busyRef.current && retryAccount.current !== account.id) {
+          retryAccount.current = account.id
+          void refresh()
+        }
+      }, [account?.id, account?.chatSyncVersion, modelReady, busy])
       if (account && !editing) {
         const name = account.username || 'New API 用户'
         const connection = sessionExpired === null ? '连接状态待确认' : sessionExpired ? '需要重新登录' : '已连接'
@@ -218,7 +315,7 @@ window.__ModuleLoader__.load({
             h('div', { className: 'media-account-name' }, h('strong', null, name)),
             h('div', { className: 'media-account-balance' }, h('span', { className: 'media-account-label' }, '可用余额'), h('strong', null, formatNewApiBalance(account)), updated && h('span', { className: 'media-account-updated' }, `更新于 ${updated}`)),
             h('div', { className: 'media-account-actions' },
-              icon('刷新余额', ['M20 7v5h-5', 'M4 17v-5h5', 'M5.6 9a7 7 0 0 1 11.9-2L20 12', 'M4 12l2.5 5a7 7 0 0 0 11.9-2'], refresh),
+              icon('刷新余额并同步模型', ['M20 7v5h-5', 'M4 17v-5h5', 'M5.6 9a7 7 0 0 1 11.9-2L20 12', 'M4 12l2.5 5a7 7 0 0 0 11.9-2'], () => refresh(true)),
               icon('重新登录', ['M20 11a8 8 0 1 0-2.5 5.8', 'M20 4v7h-7', 'M12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6', 'M7.8 18a5 5 0 0 1 8.4 0'], () => { setEditing(true); setMessage('') }),
               icon('退出登录', ['M10 17l5-5-5-5', 'M15 12H3', 'M12 3h6a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3h-6'], logout))),
           message && h('p', { role: 'status' }, message))
@@ -366,8 +463,9 @@ window.__ModuleLoader__.load({
               inspect && h('button', { type: 'button', className: 'deepimage-inspect', onClick: inspect }, '查看工具详情')))
     }
 
-    function MediaSettings({ form, credentials }) {
+    function MediaSettings({ form, credentials, modelForm }) {
       const snapshot = React.useSyncExternalStore(form.subscribe.bind(form), form.getSnapshot.bind(form), form.getSnapshot.bind(form))
+      const modelSnapshot = React.useSyncExternalStore(modelForm.subscribe.bind(modelForm), modelForm.getSnapshot.bind(modelForm), modelForm.getSnapshot.bind(modelForm))
       const [editor, setEditor] = React.useState(null)
       const [secret, setSecret] = React.useState('')
       const [body, setBody] = React.useState('')
@@ -516,7 +614,7 @@ window.__ModuleLoader__.load({
         `),
         h('h2', null, 'deepImage'),
         h('p', { className: 'media-intro' }, '管理图片和视频服务商，选择用于自动绘图的默认服务商。'),
-        snapshot.status === 'ready' && h('div', { hidden: !!editor }, h(NewApiLogin, { form, credentials, account: value.newApiAccount, onBusyChange: setAccountBusy, editing: accountEditing, setEditing: setAccountEditing })),
+        snapshot.status === 'ready' && h('div', { hidden: !!editor }, h(NewApiLogin, { form, credentials, modelForm, modelReady: modelSnapshot.status === 'ready' && modelSnapshot.writable, account: value.newApiAccount, onBusyChange: setAccountBusy, editing: accountEditing, setEditing: setAccountEditing })),
         !editor && !accountEditing && value.newApiAccount && snapshot.status === 'ready' && h('div', { className: 'media-tabs', role: 'tablist', 'aria-label': 'deepImage 页面' },
           ...(value.newApiAccount ? [['image', '绘图'], ['video', '视频'], ['settings', '设置']] : [['settings', '设置']]).map(([kind, label]) => h('button', {
             key: kind, id: `media-tab-${kind}`, type: 'button', className: 'media-tab', role: 'tab', 'aria-selected': shownKind === kind,
@@ -551,6 +649,7 @@ window.__ModuleLoader__.load({
       inject: ['slots', 'configForms', 'remote', 'remote.credentials'],
       apply(ctx) {
         const form = ctx.configForms.get('tool-media-generation')
+        const modelForm = ctx.configForms.get('llm-pi-ai')
         const credentials = ctx.remote.credentials
         ctx.inject(['remote.pluginManager'], child => { updateManager = child.remote.pluginManager; return () => { updateManager = undefined } })
         ctx.remote.$mount({ package: 'dsh-media-generation-updater', descriptors: [updateDescriptor] }).then(() => {
@@ -585,7 +684,7 @@ window.__ModuleLoader__.load({
         })
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section', id: 'media-generation', order: 15,
-          label: () => 'deepImage', inject: () => ({ form, credentials }),
+          label: () => 'deepImage', inject: () => ({ form, credentials, modelForm }),
         }, MediaSettings))
         ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
           name: 'tool.call.toolview', key: 'generate_image',

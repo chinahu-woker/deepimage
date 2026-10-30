@@ -66,3 +66,7 @@ DeepSeek Harness 处于 developer preview，发布前应在目标 DSH 版本上�
 ## 插件更新
 
 在「设置 → deepImage → 设置 → 插件更新」中检查并安装当前版本的更新。公开仓库的更新无需 GitHub Token。更新包从对应版本的 GitHub Release 下载，并验证 SHA-256；源码链接需要通过更新源码的方式维护。
+
+## 同步对话模型
+
+公司版登录后会按 New API 标记的接口类型和密钥可用范围同步 Chat Completions 和 Responses 模型。可在 Harness 对话输入框的模型选择器中选择 AIKNA 模型；点击账户卡片的刷新图标可更新模型列表。未提供模型容量的路由按 32768 上下文及 4096 输出 token 配置，可在 Harness 模型设置中调整。同步不会修改其他提供商，退出账号会移除该账号自动配置的对话路由。仅支持其他接口类型或未声明对话接口的模型不会自动导入。

@@ -26,7 +26,7 @@
 
 - **对话生图**：选择默认绘图模型后，直接在对话中描述想要的画面。
 - **视频生成**：提交异步视频任务，并查询任务状态和结果。
-- **New API 连接**：登录 [AIKNA New API](https://token.aikna.cn/)，自动配置账号可用的兼容图片和视频模型。
+- **New API 连接**：登录 [AIKNA New API](https://token.aikna.cn/)，自动配置账号可用的兼容对话、图片和视频模型。
 - **灵活配置**：管理多个服务商，为每个 API 设置请求超时，并通过高级配置适配不同的请求与响应格式。
 - **生成反馈**：图片生成期间显示加载动画和估算进度，方便了解等待状态。
 
@@ -34,8 +34,8 @@
 
 安装器包含开源版和公司版，解压后双击打开并选择所需版本：
 
-- [下载 macOS 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.6/deepImage-installer-macOS.zip)
-- [下载 Windows 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.6/deepImage-installer-Windows.zip)
+- [下载 macOS 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.7/deepImage-installer-macOS.zip)
+- [下载 Windows 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.7/deepImage-installer-Windows.zip)
 
 安装前请先启动一次 DeepSeek Harness 桌面版，再完全退出。安装可能需要联网。macOS 安装器尚未经过 Apple 公证，Windows 安装器尚未签名，也尚未在 Windows 真机验证，系统可能阻止运行。使用步骤与构建要求见 [桌面安装器说明](installer/README.md)。
 
@@ -54,7 +54,7 @@
 
    如果使用其他 profile，将 `web` 替换为实际名称。安装到正在运行的 profile 后，需要重启该 profile。
 
-2. 打开 **设置 → deepImage**，使用 AIKNA New API 账号登录。插件会根据账户可用模型及其声明的接口类型，自动添加兼容 OpenAI Images 和 OpenAI Video 的模型。账号启用两步认证时，可以输入验证码或备用码。
+2. 打开 **设置 → deepImage**，使用 AIKNA New API 账号登录。插件会根据账户可用模型及其声明的接口类型，自动添加支持 OpenAI Chat Completions、Responses、Images 和 Video 的模型。对话模型可在 Harness 的模型选择器中选择；点击账号卡片上的刷新图标可重新同步。账号启用两步认证时，可以输入验证码或备用码。
 
 3. 在“绘图”中选择默认模型，然后在对话里试试：
 
