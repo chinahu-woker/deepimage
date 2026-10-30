@@ -2,7 +2,7 @@
     - id: tool-media-generation
       name: dsh-media-generation
       config:
-        timeoutMs: 60000
+        timeoutMs: 300000
         maxImageBytes: 20971520
         imageProviders:
           # Any provider using the OpenAI Images request/response shape can be

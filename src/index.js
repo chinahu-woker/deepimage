@@ -6,7 +6,7 @@ import { DeepImageUpdater, updateDescriptor } from './updater.js'
 export const name = 'deepImage'
 export const inject = ['tools', 'credentials']
 
-const DEFAULT_TIMEOUT_MS = 60_000
+const DEFAULT_TIMEOUT_MS = 300_000
 const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024
 const DEFAULT_MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
@@ -78,7 +78,7 @@ export function apply(ctx, config) {
   const videoProviders = () => indexProviders(config.videoProviders.get(), 'video')
   const currentTimeoutMs = () => {
     const raw = typeof config.timeoutMs?.get === 'function' ? config.timeoutMs.get() : config.timeoutMs
-    return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS
+    return Number.isFinite(raw) && raw > 0 ? Math.min(raw, 2_147_483_647) : DEFAULT_TIMEOUT_MS
   }
   const maxImageBytes = config.maxImageBytes || DEFAULT_MAX_IMAGE_BYTES
   const maxResponseBytes = config.maxResponseBytes || DEFAULT_MAX_RESPONSE_BYTES
@@ -97,9 +97,9 @@ export function apply(ctx, config) {
   }))
 
   {
-    ctx.tools.register(defineTool({
+    const imageTool = defineTool({
       name: 'generate_image',
-      description: 'When the user asks you to draw or generate an image, call this tool directly using their description. Omit provider to use the configured default. Supply a provider only when the user explicitly chooses one. Return the generated image to the user. If a request times out, do not retry automatically: the provider may still be processing it. Report the timeout and let the user decide whether to try again.',
+      description: 'Generate an image with the configured image model. Use for requests to create or draw pictures, illustrations, posters, covers and visual assets, including Chinese requests such as 生成图片、画一张图、生成海报. Use the user’s description as the prompt. Omit provider to use the configured default; if the user explicitly names a model or provider, use list_media_providers to find the exact matching provider ID when available. Return the generated image. Do not substitute browser, SVG, canvas or code drawing unless the user explicitly requests that format or method. If the call fails, explain the error rather than claiming an image was generated. Do not automatically retry a timeout: the provider may still be processing it.',
       parameters: {
         provider: { type: 'string', description: 'Optional configured image provider ID; omit to use the default.' },
         prompt: { type: 'string', required: true, description: 'Describe the image to create.' },
@@ -123,6 +123,10 @@ export function apply(ctx, config) {
         const provider = requireProvider(available, requested, 'image')
         const body = makeImageBody(provider, args)
         const response = await requestJson(ctx, provider, provider.endpoint, body, exec.signal, currentTimeoutMs(), maxResponseBytes)
+        if (response?.error || response?.success === false) {
+          const detail = typeof response.error === 'string' ? response.error : response.error?.message || response.message
+          throw new Error(`Provider "${provider.id}" reported an image generation error.${typeof detail === 'string' ? ` ${detail.slice(0, 500)}` : ''}`)
+        }
         const imageUrl = getPath(response, provider.imageUrlPath)
         const encoded = getPath(response, provider.imageBase64Path)
 
@@ -153,7 +157,18 @@ export function apply(ctx, config) {
           message: `Image generated with ${provider.id} and stored as a durable DSH attachment.`,
         }
       },
-    }))
+    })
+    ctx.tools.register(imageTool)
+    ctx.inject(['systemPrompt'], child => {
+      child.systemPrompt.section({
+        name: 'deepimage:image-generation',
+        order: 3000,
+        text: ({ scope }) => {
+          if (child.tools.get('generate_image', scope) !== imageTool) return ''
+          return 'Image creation: when the user asks for a picture, illustration, poster, cover, or other generated visual, invoke generate_image through the available tool interface (or its provided SDK in PTC mode) using the user’s request. This also applies when generating an image for a document or webpage. Use the configured default unless the user names a model; for a named model, use list_media_providers if available to find its exact provider ID, and never invent an ID. Do not silently replace image generation with browser automation, SVG, canvas, drawing code, or a description. Respect explicit requests for SVG, vector graphics, diagrams, or code-based drawing. If image generation is unavailable or fails, explain the problem; do not claim success or automatically retry a timeout.'
+        },
+      })
+    })
   }
 
   {
@@ -182,7 +197,7 @@ export function apply(ctx, config) {
         return {
           provider: provider.id,
           taskId,
-          status: 'queued',
+          status: typeof getPath(response, provider.statusPath) === 'string' && getPath(response, provider.statusPath).trim() ? getPath(response, provider.statusPath) : 'submitted',
           message: `Video task submitted to ${provider.id}. Task ID: ${taskId}. Call check_video_task with this provider and task ID to check progress.`,
         }
       },
@@ -207,10 +222,12 @@ export function apply(ctx, config) {
         const videoUrl = getPath(response, provider.videoUrlPath)
         const providerError = getPath(response, provider.errorPath)
 
-        if (typeof status !== 'string') {
+        if (typeof status !== 'string' || !status.trim()) {
           throw new Error(`Provider "${provider.id}" did not return a task status at "${provider.statusPath}".`)
         }
-        if (provider.successStatuses.includes(status)) {
+        const normalizedStatus = status.trim().toLowerCase()
+        const matchesStatus = statuses => (statuses || []).some(item => typeof item === 'string' && item.trim().toLowerCase() === normalizedStatus)
+        if (matchesStatus(provider.successStatuses)) {
           if (typeof videoUrl !== 'string' || videoUrl.length === 0) {
             throw new Error(`Task ${args.taskId} succeeded, but no video URL was found at "${provider.videoUrlPath}".`)
           }
@@ -222,7 +239,7 @@ export function apply(ctx, config) {
             message: `Video generation completed with ${provider.id}. Video URL: ${videoUrl}`,
           }
         }
-        if (provider.failureStatuses.includes(status)) {
+        if (matchesStatus(provider.failureStatuses)) {
           const detail = typeof providerError === 'string' ? ` Provider error: ${providerError.slice(0, 500)}` : ''
           return {
             provider: provider.id,
@@ -231,11 +248,12 @@ export function apply(ctx, config) {
             message: `Video task ${args.taskId} ended with status "${status}".${detail}`,
           }
         }
+        const pending = ['queued', 'pending', 'submitted', 'created', 'processing', 'running', 'in_progress', 'in-progress'].includes(normalizedStatus)
         return {
           provider: provider.id,
           taskId: args.taskId,
           status,
-          message: `Video task ${args.taskId} is still ${status}. Check again later with check_video_task.`,
+          message: `Video task ${args.taskId} ${pending ? `is still ${status}` : `reported an unrecognized status "${status}"`}.${typeof response.progress === 'number' && response.progress >= 0 && response.progress <= 100 ? ` Progress: ${response.progress}%.` : ''} Check again later with check_video_task.`,
         }
       },
     }))
@@ -281,6 +299,15 @@ function validateEndpoint(value, label, allowInsecureHttp = false) {
   }
 }
 
+function requestFailure(error, provider, requestSignal, timeoutSignal, timeoutMs, timeoutMessage) {
+  if (requestSignal.aborted) {
+    if (timeoutSignal.aborted && requestSignal.reason === timeoutSignal.reason) return new Error(timeoutMessage || `Provider "${provider.id}" request timed out after ${timeoutMs} ms. The remote task may still be running.`)
+    return requestSignal.reason || error
+  }
+  if (error instanceof TypeError) return new Error(`Connection to provider "${provider.id}" failed while sending or reading the response.`)
+  return error
+}
+
 async function requestJson(ctx, provider, endpoint, body, signal, timeoutMs, maxResponseBytes, method = 'POST') {
   const credential = await ctx.credentials.resolve(credentialRef(provider.apiKeyEnv))
   if (!credential?.value) throw new Error(`No API key is configured for provider "${provider.id}". Set credential reference ${provider.apiKeyEnv}.`)
@@ -289,11 +316,13 @@ async function requestJson(ctx, provider, endpoint, body, signal, timeoutMs, max
     Accept: 'application/json',
     [provider.authHeader]: `${provider.authPrefix}${credential.value}`,
   }
+  const timeoutSignal = AbortSignal.timeout(timeoutMs)
+  const requestSignal = AbortSignal.any([signal, timeoutSignal])
   const init = {
     method,
     headers,
     redirect: 'error',
-    signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
+    signal: requestSignal,
   }
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json'
@@ -304,11 +333,12 @@ async function requestJson(ctx, provider, endpoint, body, signal, timeoutMs, max
   try {
     response = await fetch(endpoint, init)
   } catch (error) {
-    if (signal.aborted) throw error
-    if (error?.name === 'TimeoutError') throw new Error(`Provider "${provider.id}" timed out after ${timeoutMs} ms.`)
-    throw new Error(`Could not reach provider "${provider.id}" (${error?.name ?? 'network error'}).`)
+    throw requestFailure(error, provider, requestSignal, timeoutSignal, timeoutMs)
   }
-  if (!response.ok) throw new Error(`Provider "${provider.id}" returned HTTP ${response.status}. Check its API key, endpoint, quota, and request format.`)
+  if (!response.ok) {
+    if (response.status === 408 || response.status === 504) throw new Error(`Provider "${provider.id}" or its gateway reported a timeout (HTTP ${response.status}); the remote task may still be running.`)
+    throw new Error(`Provider "${provider.id}" returned HTTP ${response.status}. Check its API key, endpoint, quota, and request format.`)
+  }
 
   const contentType = response.headers.get('content-type') ?? ''
   if (!contentType.toLowerCase().includes('json')) {
@@ -330,7 +360,7 @@ async function requestJson(ctx, provider, endpoint, body, signal, timeoutMs, max
       totalBytes += value.byteLength
       if (totalBytes > maxResponseBytes) {
         await reader.cancel()
-        throw new Error('Response body limit exceeded')
+        throw new Error(`Provider "${provider.id}" response exceeds the configured ${maxResponseBytes}-byte limit.`)
       }
       chunks.push(value)
     }
@@ -340,9 +370,10 @@ async function requestJson(ctx, provider, endpoint, body, signal, timeoutMs, max
       bytes.set(chunk, offset)
       offset += chunk.byteLength
     }
-    return JSON.parse(new TextDecoder().decode(bytes))
-  } catch {
-    throw new Error(`Provider "${provider.id}" returned invalid JSON or exceeded the response size limit.`)
+    try { return JSON.parse(new TextDecoder().decode(bytes)) }
+    catch (error) { if (error instanceof SyntaxError) throw new Error(`Provider "${provider.id}" returned invalid JSON.`); throw error }
+  } catch (error) {
+    throw requestFailure(error, provider, requestSignal, timeoutSignal, timeoutMs)
   }
 }
 

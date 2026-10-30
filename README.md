@@ -33,8 +33,8 @@
 
 下载并解压安装器，打开后可选择开源版或 New API 公司版：
 
-- [下载 macOS 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.8/deepImage-installer-macOS.zip)
-- [下载 Windows 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.8/deepImage-installer-Windows.zip)
+- [下载 macOS 安装器](https://github.com/chinahu-woker/deepimage/releases/download/v0.1.6/deepImage-installer-macOS.zip)
+- [下载 Windows 安装器](https://github.com/chinahu-woker/deepimage/releases/download/v0.1.6/deepImage-installer-Windows.zip)
 
 安装器每次运行都会联网下载所选版本的最新插件。安装前请先启动一次 DeepSeek Harness 桌面版，再完全退出。macOS 双击「安装 deepImage.app」；Windows 双击 `Install deepImage.cmd`。安装可能需要联网。
 
@@ -47,7 +47,7 @@
 1. 从 [Releases](https://github.com/chinahu-woker/deepimage/releases) 下载开源版安装包，并在下载目录运行：
 
    ```sh
-   dsh plugin --profile web add ./deepimage-open-source-0.1.5.tgz
+   dsh plugin --profile web add ./deepimage-open-source-0.1.6.tgz
    dsh --profile web
    ```
 
@@ -68,7 +68,7 @@
 
    > 画一张雨后霓虹街道的电影感插画。
 
-模型会根据对话内容决定是否调用绘图工具。视频生成则通过创建任务和查询状态获取结果。
+使用支持工具调用的对话模型，并配置默认图片服务商后，可以直接描述要生成的图片。明确要求 SVG、矢量图或用代码绘制时，仍按指定方式处理。视频生成通过创建任务和查询状态获取结果。
 
 ## 检查插件更新
 
@@ -80,7 +80,7 @@
 
 API Key 可保存到 Harness 凭据服务，也可通过环境变量提供。不同服务商的协议和模型参数可能不同，可在高级设置中调整请求体和响应字段路径。
 
-设置页的“生成超时”用于控制单次请求的等待上限；图片生成通常需要较长时间，可按需调高。配置文件中的全局 `timeoutMs` 使用毫秒，未设置时默认为 60 秒。
+设置页的“生成超时”用于控制单次请求的等待上限；图片生成通常需要较长时间，可按需调高。配置文件中的全局 `timeoutMs` 使用毫秒，未设置时默认为 300 秒（5 分钟），已有的自定义超时配置会保留。请求超时不代表远程任务已停止，视频任务可使用原任务 ID 继续查询。
 
 更多配置、开发与调试说明见 [详细文档](README.zh.md)。
 

@@ -183,7 +183,7 @@ window.__ModuleLoader__.load({
                 phase === 'start' ? h(React.Fragment, null, h('span', { className: 'deepimage-percent' }, `${progress}%`), h('span', { className: 'deepimage-estimate' }, '估算进度')) : h('span', null, '准备中…')))
           : h('div', { className: 'deepimage-result' },
               h('strong', null, block.isError ? '图片生成失败' : '图片生成完成'),
-              ...content.map((part, index) => part?.type === 'image' && part.attachment
+              ...content.filter(part => block.isError || part?.type !== 'image').map((part, index) => part?.type === 'image' && part.attachment
                 ? h(GeneratedImage, { key: index, attachment: part.attachment, loadImage })
                 : part?.type === 'text' && typeof part.text === 'string'
                   ? h('p', { key: index }, part.text)
@@ -203,10 +203,10 @@ window.__ModuleLoader__.load({
       const [timeoutDraft, setTimeoutDraft] = React.useState(null)
       const [timeoutBusy, setTimeoutBusy] = React.useState(false)
       const value = snapshot.value || {}
-      const timeoutValue = timeoutDraft ?? String(Math.round((Number(value.timeoutMs) || 60000) / 1000))
+      const timeoutValue = timeoutDraft ?? String(Math.round((Math.min(Number(value.timeoutMs) || 300000, 2147483647)) / 1000))
       const saveTimeout = async () => {
         const seconds = Number(timeoutValue)
-        if (!Number.isFinite(seconds) || seconds < 1) { setError('超时时间需要是不小于 1 的秒数。'); return }
+        if (!Number.isFinite(seconds) || seconds < 1 || seconds > 2147483.647) { setError('超时时间需为 1 至 2147483.647 秒。'); return }
         setTimeoutBusy(true); setError('')
         try {
           const ok = await form.mutate([{ op: 'set', path: ['timeoutMs'], value: Math.round(seconds * 1000) }], snapshot.revision)
@@ -350,7 +350,7 @@ window.__ModuleLoader__.load({
             h('strong', null, '生成超时'),
             h('p', null, '单次生成请求的等待上限（秒）。图片生成本身耗时较长，或服务商响应较慢时可以调高。')),
           h('div', { className: 'media-global-control' },
-            h('input', { type: 'number', min: 1, step: 1, inputMode: 'numeric', value: timeoutValue, disabled: !snapshot.writable || timeoutBusy, onChange: e => setTimeoutDraft(e.target.value) }),
+            h('input', { type: 'number', min: 1, max: 2147483.647, step: 1, inputMode: 'numeric', value: timeoutValue, disabled: !snapshot.writable || timeoutBusy, onChange: e => setTimeoutDraft(e.target.value) }),
             h('span', null, '秒'),
             h('button', { type: 'button', className: 'media-form-button', disabled: !snapshot.writable || timeoutBusy || timeoutDraft === null, onClick: saveTimeout }, timeoutBusy ? '保存中…' : '保存'))),
         !editor && h('div', { className: 'media-tabs', role: 'tablist', 'aria-label': 'deepImage 页面' },
