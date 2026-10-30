@@ -98,6 +98,99 @@ window.__ModuleLoader__.load({
         message && h('p', { className: 'media-update-message', role: 'status' }, message))
     }
 
+    function GeneratedImage({ attachment, loadImage }) {
+      const [url, setUrl] = React.useState(() => loadImage.peek?.(attachment) || '')
+      const [failed, setFailed] = React.useState(false)
+      React.useEffect(() => {
+        let active = true
+        setUrl(loadImage.peek?.(attachment) || '')
+        setFailed(false)
+        loadImage(attachment).then(value => { if (active) setUrl(value) }, () => { if (active) setFailed(true) })
+        return () => { active = false }
+      }, [attachment, loadImage])
+      return url && !failed ? h('img', { className: 'deepimage-result-image', src: url, alt: '生成的图片', onError: () => setFailed(true) })
+        : h('p', null, failed ? '图片加载失败，请查看工具详情。' : '正在加载图片…')
+    }
+
+    function GeneratedUrlImage({ url }) {
+      const [failed, setFailed] = React.useState(false)
+      React.useEffect(() => { setFailed(false) }, [url])
+      return failed ? h('p', null, '图片链接已失效或无法访问，请查看工具详情。')
+        : h('img', { src: url, alt: '生成的图片', loading: 'lazy', onError: () => setFailed(true) })
+    }
+
+    function generatedImages(calls) {
+      const images = []
+      const visit = call => {
+        if (!call) return
+        const imageResult = call.name === 'generate_image' || (!call.name && (call.content || []).some(part => part?.type === 'text' && typeof part.text === 'string' && /^Image generated with .+\./.test(part.text)))
+        if (call.kind === 'tool-result' && imageResult && !call.isError) {
+          const attachments = (call.content || []).filter(part => part?.type === 'image' && part.attachment).map(part => part.attachment)
+          if (attachments.length) attachments.forEach(attachment => images.push({ attachment, key: `${call.callId}:${attachment.attachmentId}` }))
+          else for (const part of call.content || []) {
+            const match = part?.type === 'text' && typeof part.text === 'string' && /^Image URL: (https?:\/\/\S+)$/m.exec(part.text)
+            if (match) images.push({ url: match[1], key: `${call.callId}:${match[1]}` })
+          }
+        }
+        for (const child of call.subCalls || []) visit(child)
+      }
+      for (const entry of calls) visit(entry.root)
+      return images
+    }
+
+    function TurnGeneratedImages({ turn, sessionId, useChat, uiConversation }) {
+      const nodes = useChat(snapshot => snapshot.nodes)
+      const source = React.useMemo(() => nodes.turnDataSource(turn.turn, 'tool-call'), [nodes, turn.turn])
+      const calls = React.useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
+      const loadImage = React.useMemo(() => Object.assign(
+        attachment => uiConversation.imageUrl(sessionId, attachment),
+        { peek: attachment => uiConversation.peekImageUrl(sessionId, attachment) },
+      ), [uiConversation, sessionId])
+      const images = generatedImages(calls)
+      if (!images.length) return null
+      return h('div', { className: 'deepimage-turn-images', 'aria-label': '生成的图片' },
+        h('style', null, '.deepimage-turn-images{display:flex;flex-wrap:wrap;gap:12px}.deepimage-turn-images img{display:block;max-width:min(356px,100%);max-height:500px;width:auto;height:auto;border-radius:12px}.deepimage-turn-images p{color:var(--dsw-alias-label-secondary,#6b7280)}'),
+        ...images.map(image => image.attachment
+          ? h(GeneratedImage, { key: image.key, attachment: image.attachment, loadImage })
+          : h(GeneratedUrlImage, { key: image.key, url: image.url })))
+    }
+
+    function ImageToolView({ phase, block, loadImage, inspect }) {
+      const [now, setNow] = React.useState(() => Date.now())
+      React.useEffect(() => {
+        if (phase !== 'start') return
+        setNow(Date.now())
+        const timer = setInterval(() => setNow(Date.now()), 1000)
+        return () => clearInterval(timer)
+      }, [phase, block.callId])
+      const progress = Math.min(95, Math.floor(95 * (1 - Math.exp(-Math.max(0, now - block.time) / 60000))))
+      const content = phase === 'result' && Array.isArray(block.content) ? block.content : []
+      return h('div', { className: 'deepimage-tool' },
+        h('style', null, `
+          .deepimage-tool{max-width:356px;margin:8px 0;color:var(--dsw-alias-label-primary,inherit);font:var(--dsw-font-s-14,14px/22px sans-serif)}
+          .deepimage-loading{position:relative;overflow:hidden;width:100%;aspect-ratio:1;border-radius:30px;background:var(--dsw-alias-settings-card-fill,#f2f2f2)}
+          .deepimage-dots{position:absolute;inset:0;background-image:radial-gradient(circle,rgba(90,97,110,.43) 1px,transparent 1.2px);background-size:12px 12px;mask-image:radial-gradient(ellipse at 67% 48%,#000 0%,transparent 70%);-webkit-mask-image:radial-gradient(ellipse at 67% 48%,#000 0%,transparent 70%);animation:deepimage-pulse 3s ease-in-out infinite alternate}
+          .deepimage-status{position:absolute;right:28px;bottom:28px;display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:112px;min-height:58px;padding:6px 14px;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l4,#dedede);border-radius:999px;background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:0 4px 12px rgba(0,0,0,.06);color:var(--dsw-alias-brand-text,#0068cf)}
+          .deepimage-percent{font-size:28px;line-height:30px;font-variant-numeric:tabular-nums}.deepimage-estimate{font-size:11px;line-height:14px;color:var(--dsw-alias-label-secondary,#6b7280)}
+          .deepimage-result{overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary,inherit)}.deepimage-result p{margin:4px 0;white-space:pre-wrap}.deepimage-result-image{display:block;max-width:100%;height:auto;border-radius:12px;margin:8px 0}.deepimage-inspect{font:inherit;color:inherit;background:transparent;border:0;padding:4px 0;cursor:pointer;text-decoration:underline}
+          @keyframes deepimage-pulse{from{opacity:.45;transform:scale(.98)}to{opacity:1;transform:scale(1.02)}}
+          @media(prefers-reduced-motion:reduce){.deepimage-dots{animation:none}}
+        `),
+        phase !== 'result'
+          ? h('div', { className: 'deepimage-loading', role: 'status', 'aria-label': phase === 'start' ? '正在生成图片，显示的百分比为估算进度' : '正在准备生成图片' },
+              h('div', { className: 'deepimage-dots', 'aria-hidden': true }),
+              h('div', { className: 'deepimage-status', 'aria-hidden': true },
+                phase === 'start' ? h(React.Fragment, null, h('span', { className: 'deepimage-percent' }, `${progress}%`), h('span', { className: 'deepimage-estimate' }, '估算进度')) : h('span', null, '准备中…')))
+          : h('div', { className: 'deepimage-result' },
+              h('strong', null, block.isError ? '图片生成失败' : '图片生成完成'),
+              ...content.map((part, index) => part?.type === 'image' && part.attachment
+                ? h(GeneratedImage, { key: index, attachment: part.attachment, loadImage })
+                : part?.type === 'text' && typeof part.text === 'string'
+                  ? h('p', { key: index }, part.text)
+                  : h('p', { key: index }, JSON.stringify(part))),
+              inspect && h('button', { type: 'button', className: 'deepimage-inspect', onClick: inspect }, '查看工具详情')))
+    }
+
     function MediaSettings({ form, credentials }) {
       const snapshot = React.useSyncExternalStore(form.subscribe.bind(form), form.getSnapshot.bind(form), form.getSnapshot.bind(form))
       const [editor, setEditor] = React.useState(null)
@@ -302,6 +395,15 @@ window.__ModuleLoader__.load({
           name: 'settings.section', id: 'media-generation', order: 15,
           label: () => 'deepImage', inject: () => ({ form, credentials }),
         }, MediaSettings))
+        ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
+          name: 'tool.call.toolview', key: 'generate_image',
+        }, ImageToolView))
+        ctx.inject(['uiConversation'], child => {
+          child.slots.inject('conversation.chat.turnTail', () => child.slots.register({
+            name: 'conversation.chat.turnTail', id: 'deepimage-generated-images',
+            inject: () => ({ uiConversation: child.uiConversation }),
+          }, TurnGeneratedImages))
+        })
       },
     }
   },
