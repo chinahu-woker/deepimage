@@ -1,5 +1,4 @@
 import { Service } from '@deepseek-ai/cordis'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -7,7 +6,6 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 
 const apiBase = 'https://api.github.com/repos/chinahu-woker/deepimage'
 const allowedDownloadHosts = new Set(['api.github.com', 'github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'])
-const credential = credentialRef('DEEPIMAGE_GITHUB_TOKEN')
 const maxArchiveBytes = 40 * 1024 * 1024
 
 export const updateCodec = { mode: 'strict', typeSymbol: 'deepimage#update-request', create: () => ({ parse(value) {
@@ -55,34 +53,77 @@ export class DeepImageUpdater extends Service {
     if (!bundle) throw new Error('当前配置不是可更新的插件安装。')
     return { edition, version: manifest.version, linked: bundle.source?.startsWith('link:') === true, enabled: bundle.enabled }
   }
-  async githubToken() {
-    const hit = await this.ctx.credentials.resolve(credential)
-    return hit?.value || ''
-  }
-  async fetchGithub(url, token, accept, redirects = 0) {
+  async fetchGithub(url, accept, redirects = 0) {
     const parsed = new URL(url)
     if (parsed.protocol !== 'https:' || !allowedDownloadHosts.has(parsed.hostname) || parsed.username || parsed.password || parsed.port) throw new Error('更新地址不受信任。')
     const response = await fetch(parsed, {
       redirect: 'manual', signal: AbortSignal.timeout(30000),
-      headers: { Accept: accept, 'User-Agent': 'deepImage-updater', ...(parsed.hostname === 'api.github.com' && token ? { Authorization: `Bearer ${token}` } : {}), ...(parsed.hostname === 'api.github.com' ? { 'X-GitHub-Api-Version': '2022-11-28' } : {}) },
+      headers: { Accept: accept, 'User-Agent': 'deepImage-updater', ...(parsed.hostname === 'api.github.com' ? { 'X-GitHub-Api-Version': '2022-11-28' } : {}) },
     })
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get('location')
       if (!location || redirects >= 4) throw new Error('更新下载重定向无效。')
       await response.body?.cancel()
-      return this.fetchGithub(new URL(location, parsed).href, token, accept, redirects + 1)
+      return this.fetchGithub(new URL(location, parsed).href, accept, redirects + 1)
     }
     if (!response.ok) {
       await response.body?.cancel()
-      if (response.status === 401 || response.status === 403 || response.status === 404) throw new Error('无法访问更新仓库。请检查 GitHub Token 的仓库 Contents 只读权限，或稍后重试。')
+      if (parsed.hostname === 'api.github.com' && (response.status === 403 || response.status === 429)) {
+        const error = new Error('GitHub 匿名请求暂时受限。')
+        error.code = 'GITHUB_RATE_LIMIT'
+        throw error
+      }
+      if (response.status === 404) throw new Error('无法访问公开更新仓库，请稍后重试。')
       throw new Error(`更新服务器请求失败（HTTP ${response.status}）。`)
     }
     return response
   }
+  async latestFromPages(info) {
+    const base = 'https://github.com/chinahu-woker/deepimage/releases'
+    const prefix = info.edition === 'newapi' ? 'newapi-v' : 'v'
+    const candidates = []
+    let page = 1
+    for (; page <= 10; page++) {
+      const response = await this.fetchGithub(`${base}?page=${page}`, 'text/html')
+      const html = (await limitedBody(response, 4 * 1024 * 1024)).toString('utf8')
+      const sections = html.match(/<section\b[^>]*\bid="release-[^"]+"[^>]*>[\s\S]*?<\/section>/g) || []
+      for (const section of sections) {
+        if (/>\s*(?:Pre-release|Prerelease)\s*</i.test(section)) continue
+        const match = section.match(/href="\/chinahu-woker\/deepimage\/releases\/tag\/([^"?#]+)"/)
+        if (!match) continue
+        let tag
+        try { tag = decodeURIComponent(match[1]) } catch { continue }
+        if (!tag.startsWith(prefix)) continue
+        const version = tag.slice(prefix.length)
+        if (stableVersion(version)) candidates.push({ tag, version })
+      }
+      if (!/<a\b[^>]*\brel="next"[^>]*>/i.test(html)) break
+    }
+    if (page > 10) throw new Error('发布版本过多，请前往 GitHub Release 查看更新。')
+    candidates.sort((a, b) => compareVersions(b.version, a.version))
+    const latest = candidates[0]
+    if (!latest) return null
+    const assets = await this.fetchGithub(`${base}/expanded_assets/${encodeURIComponent(latest.tag)}`, 'text/html')
+    const html = (await limitedBody(assets, 4 * 1024 * 1024)).toString('utf8')
+    const names = [`deepimage-${info.edition}-${latest.version}.tgz`, ...(info.edition === 'open-source' ? [`dsh-media-generation-${latest.version}.tgz`] : [])]
+    const rows = html.match(/<li\b[^>]*>[\s\S]*?<\/li>/g) || []
+    for (const name of names) {
+      const href = `/chinahu-woker/deepimage/releases/download/${latest.tag}/${name}`
+      const row = rows.find(item => item.includes(`href="${href}"`))
+      const digest = row?.match(/sha256:([a-f0-9]{64})/)?.[1]
+      if (digest) return { version: latest.version, name, digest, size: null, tag: latest.tag }
+    }
+    throw new Error('最新版本的安装包缺失或无法校验，请联系维护人员。')
+  }
   async latest(info) {
-    const token = await this.githubToken()
-    const response = await this.fetchGithub(`${apiBase}/releases?per_page=100`, token, 'application/vnd.github+json')
-    const releases = JSON.parse((await limitedBody(response, 4 * 1024 * 1024)).toString('utf8'))
+    let releases
+    try {
+      const response = await this.fetchGithub(`${apiBase}/releases?per_page=100`, 'application/vnd.github+json')
+      releases = JSON.parse((await limitedBody(response, 4 * 1024 * 1024)).toString('utf8'))
+    } catch (error) {
+      if (error.code === 'GITHUB_RATE_LIMIT') return this.latestFromPages(info)
+      throw error
+    }
     if (!Array.isArray(releases)) throw new Error('更新版本信息无效。')
     const prefix = info.edition === 'newapi' ? 'newapi-v' : 'v'
     const candidates = []
@@ -99,26 +140,23 @@ export class DeepImageUpdater extends Service {
     const latest = candidates[0]
     if (!latest) return null
     const asset = latest.asset
-    if (!asset || !Number.isSafeInteger(asset.id) || asset.id <= 0 || !Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > maxArchiveBytes || !/^sha256:[a-f0-9]{64}$/.test(asset.digest || '')) throw new Error('最新版本的安装包缺失或无法校验，请联系维护人员。')
-    return { version: latest.version, id: asset.id, size: asset.size, digest: asset.digest.slice(7), tag: latest.tag }
+    if (!asset || !Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > maxArchiveBytes || !/^sha256:[a-f0-9]{64}$/.test(asset.digest || '')) throw new Error('最新版本的安装包缺失或无法校验，请联系维护人员。')
+    return { version: latest.version, name: asset.name, size: asset.size, digest: asset.digest.slice(7), tag: latest.tag }
   }
   async request(input) {
     if (this.ctx.invocation?.peer?.principal?.kind !== 'owner') throw new Error('更新插件仅对本机用户开放。')
     const info = await this.installed()
-    if (input.action === 'status') {
-      const token = await this.ctx.credentials.describe(credential)
-      return { ...info, tokenConfigured: token.configured }
-    }
+    if (input.action === 'status') return info
     if (info.linked) throw new Error('当前为本地开发链接，请更新源码后重启开发预览。')
     const latest = await this.latest(info)
     if (!latest) throw new Error('没有找到可验证的版本，请检查 Release 安装包。')
     const newer = compareVersions(latest.version, info.version) > 0
     if (input.action === 'check') return { ...info, latest: latest.version, available: newer }
     if (!newer || latest.version !== input.version) throw new Error('更新版本已变化，请重新检查。')
-    const token = await this.githubToken()
-    const response = await this.fetchGithub(`${apiBase}/releases/assets/${latest.id}`, token, 'application/octet-stream')
+    const url = `https://github.com/chinahu-woker/deepimage/releases/download/${encodeURIComponent(latest.tag)}/${encodeURIComponent(latest.name)}`
+    const response = await this.fetchGithub(url, 'application/octet-stream')
     const bytes = await limitedBody(response, maxArchiveBytes)
-    if (bytes.length !== latest.size || createHash('sha256').update(bytes).digest('hex') !== latest.digest) throw new Error('更新包校验失败，请稍后重试。')
+    if ((latest.size !== null && bytes.length !== latest.size) || createHash('sha256').update(bytes).digest('hex') !== latest.digest) throw new Error('更新包校验失败，请稍后重试。')
     const directory = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'deepimage-updates')
     await mkdir(directory, { recursive: true, mode: 0o700 })
     const path = join(directory, `deepimage-${latest.digest}.tgz`)

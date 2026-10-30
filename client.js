@@ -215,9 +215,8 @@ window.__ModuleLoader__.load({
       try { if (value) sessionStorage.setItem(updatePendingKey, JSON.stringify(value)); else sessionStorage.removeItem(updatePendingKey) } catch {}
     }
 
-    function UpdatePanel({ credentials }) {
+    function UpdatePanel() {
       const [status, setStatus] = React.useState(null)
-      const [token, setToken] = React.useState('')
       const [message, setMessage] = React.useState('')
       const [busy, setBusy] = React.useState(false)
       const busyRef = React.useRef(false)
@@ -253,17 +252,6 @@ window.__ModuleLoader__.load({
         } catch (error) { setStatus(null); setMessage(error.message || '检查更新失败，请重试。') }
         finally { busyRef.current = false; setBusy(false) }
       }
-      const saveToken = async event => {
-        event.preventDefault()
-        if (busyRef.current || !token.trim()) return
-        busyRef.current = true; setBusy(true); setMessage('')
-        try {
-          const result = await credentials.set('DEEPIMAGE_GITHUB_TOKEN', token.trim())
-          if (!result.ok) throw new Error(result.error?.message || '凭据保存失败。')
-          setToken(''); setStatus(null); setMessage('GitHub Token 已保存，请检查更新。')
-        } catch (error) { setMessage(error.message || '凭据保存失败，请重试。') }
-        finally { busyRef.current = false; setBusy(false) }
-      }
       const install = async () => {
         if (busyRef.current || !status?.available) return
         busyRef.current = true; setBusy(true); setMessage('正在下载并校验更新…')
@@ -285,7 +273,6 @@ window.__ModuleLoader__.load({
       return h('section', { className: 'media-update', 'aria-label': '插件更新' },
         h('div', { className: 'media-update-head' }, h('div', null, h('strong', null, '插件更新'), h('p', null, status ? `当前 ${status.version} · ${status.edition === 'newapi' ? 'New API 公司版' : '开源版'}` : '检查当前版本的更新。')),
           status?.available ? h('button', { type: 'button', className: 'media-form-button media-form-primary', disabled: busy, onClick: install }, busy ? '处理中…' : `更新到 ${status.latest}`) : h('button', { type: 'button', className: 'media-form-button', disabled: busy, onClick: check }, busy ? '检查中…' : '检查更新')),
-        h('details', null, h('summary', null, '配置 GitHub Token'), h('form', { onSubmit: saveToken }, h('p', null, '私有仓库需要有该仓库 Contents 只读权限的 GitHub Token。凭据保存在 Harness 中。'), h('label', null, 'GitHub Token', h('input', { type: 'password', autoComplete: 'off', value: token, onChange: e => setToken(e.target.value) })), h('button', { className: 'media-form-button', type: 'submit', disabled: busy || !token.trim() }, '保存凭据'))),
         message && h('p', { className: 'media-update-message', role: 'status' }, message))
     }
 
@@ -449,7 +436,7 @@ window.__ModuleLoader__.load({
           .media-settings button{cursor:pointer}
           .media-settings button:disabled{opacity:.45;cursor:not-allowed}
           .media-settings button:focus-visible,.media-settings summary:focus-visible,.media-settings input:focus-visible,.media-settings textarea:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:2px}
-          .media-update{margin-top:20px;padding:14px 16px;border:1px solid var(--dsw-alias-settings-card-stroke,#e2e5eb);border-radius:var(--dsw-radius-md,12px)}.media-update-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.media-update p{color:var(--dsw-alias-label-secondary,#6b7280);font-size:13px;line-height:20px}.media-update details{margin-top:12px}.media-update summary{cursor:pointer;font-size:13px;color:var(--dsw-alias-label-secondary,#6b7280)}.media-update form{display:grid;gap:8px;margin-top:10px}.media-update label{display:grid;gap:6px}.media-update input{box-sizing:border-box;width:100%;padding:8px 10px;border:1px solid var(--dsw-alias-border-l3,#d9dce3);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1,transparent);color:inherit}.media-update form button{justify-self:start}.media-update-message{margin-top:10px!important;overflow-wrap:anywhere}
+          .media-update{margin-top:20px;padding:14px 16px;border:1px solid var(--dsw-alias-settings-card-stroke,#e2e5eb);border-radius:var(--dsw-radius-md,12px)}.media-update-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.media-update p{color:var(--dsw-alias-label-secondary,#6b7280);font-size:13px;line-height:20px}.media-update-message{margin-top:10px!important;overflow-wrap:anywhere}
           .media-intro{margin-top:8px!important;color:var(--dsw-alias-label-secondary,#6b7280);max-width:48ch}
           .media-tabs{display:flex;gap:24px;margin-top:24px;border-bottom:1px solid var(--dsw-alias-border-l4,#e2e5eb)}
           .media-tab{position:relative;padding:8px 2px 12px;border:0;background:transparent;color:var(--dsw-alias-label-secondary,#6b7280)!important}
@@ -485,7 +472,7 @@ window.__ModuleLoader__.load({
         `),
         h('h2', null, 'deepImage'),
         h('p', { className: 'media-intro' }, '管理图片和视频服务商，选择用于自动绘图的默认服务商。'),
-        !editor && snapshot.status === 'ready' && h(UpdatePanel, { credentials }),
+        !editor && snapshot.status === 'ready' && h(UpdatePanel),
         !editor && snapshot.status === 'ready' && h(NewApiLogin, { form, credentials, account: value.newApiAccount }),
         !editor && snapshot.status === 'ready' && value.newApiAccount && h('div', { className: 'media-tabs', role: 'tablist', 'aria-label': '服务商类型' },
           ...[['image', '绘图'], ['video', '视频']].map(([kind, label]) => h('button', {
