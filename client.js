@@ -192,20 +192,20 @@ window.__ModuleLoader__.load({
             h('div', null, h('h3', null, title), h('p', { className: 'media-section-description' }, kind === 'image' ? '用于在对话中生成图片' : '用于创建和查询视频任务')),
             h('button', { type: 'button', className: 'media-add', disabled: !snapshot.writable || busy, onClick: () => open(kind, null, null) }, h('span', { 'aria-hidden': true }, '+'), '添加服务商')),
           list.length ? h('div', { className: 'media-card-list' }, list.map((provider, index) => h('article', { className: 'media-card', key: provider.id },
-            h('div', { className: 'media-card-top' },
+            h('div', { className: 'media-card-body' },
               h('div', { className: 'media-card-identity' }, h('strong', null, provider.id), kind === 'image' && value.defaultImageProvider === provider.id && h('span', { className: 'media-badge' }, '默认')),
-              h('div', { className: 'media-card-actions' },
-                h('button', { type: 'button', className: 'media-edit', disabled: busy || !snapshot.writable, onClick: () => open(kind, provider, index) }, '编辑'),
-                h(Menu, {
-                  open: openMenu === `${kind}:${provider.id}`,
-                  onClose: () => setOpenMenu(null), align: 'end', portal: true, autoFocus: true,
-                  anchor: h('button', { type: 'button', className: 'media-more', disabled: busy || !snapshot.writable, 'aria-label': `${provider.id} 的更多操作`, 'aria-haspopup': 'menu', 'aria-expanded': openMenu === `${kind}:${provider.id}`, onClick: () => setOpenMenu(current => current === `${kind}:${provider.id}` ? null : `${kind}:${provider.id}`) }, '•••'),
-                },
-                kind === 'image' && value.defaultImageProvider !== provider.id && h(MenuItemButton, { onSelect: () => { setOpenMenu(null); setDefault(provider.id) } }, '设为默认'),
-                h(MenuItemButton, { onSelect: () => { setOpenMenu(null); remove(kind, index) } }, '删除服务商')))),
-            h('div', { className: 'media-card-meta' },
+              h('div', { className: 'media-card-meta' },
               h('div', null, h('span', null, '模型'), h('span', { title: provider.model }, provider.model)),
-              h('div', null, h('span', null, '凭据引用'), h('span', { title: provider.apiKeyEnv }, provider.apiKeyEnv)))))) : h('div', { className: 'media-empty' }, '暂无服务商，添加后即可使用。'))
+                h('div', null, h('span', null, '凭据引用'), h('span', { title: provider.apiKeyEnv }, provider.apiKeyEnv)))),
+            h('div', { className: 'media-card-actions' },
+              h('button', { type: 'button', className: 'media-edit', disabled: busy || !snapshot.writable, onClick: () => open(kind, provider, index) }, '编辑'),
+              h(Menu, {
+                open: openMenu === `${kind}:${provider.id}`,
+                onClose: () => setOpenMenu(null), align: 'end', portal: true, autoFocus: true,
+                anchor: h('button', { type: 'button', className: 'media-more', disabled: busy || !snapshot.writable, 'aria-label': `${provider.id} 的更多操作`, 'aria-haspopup': 'menu', 'aria-expanded': openMenu === `${kind}:${provider.id}`, onClick: () => setOpenMenu(current => current === `${kind}:${provider.id}` ? null : `${kind}:${provider.id}`) }, '•••'),
+              },
+              kind === 'image' && value.defaultImageProvider !== provider.id && h(MenuItemButton, { onSelect: () => { setOpenMenu(null); setDefault(provider.id) } }, '设为默认'),
+              h(MenuItemButton, { onSelect: () => { setOpenMenu(null); remove(kind, index) } }, '删除服务商')))))) : h('div', { className: 'media-empty' }, '暂无服务商，添加后即可使用。'))
       }
       return h('div', { className: 'media-settings' },
         h('style', null, `
@@ -232,13 +232,12 @@ window.__ModuleLoader__.load({
           .media-add,.media-form-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:0 12px;border:1px solid var(--dsw-alias-border-l3,#d9dce3);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1,transparent);white-space:nowrap}
           .media-add span{font-size:18px;line-height:1}
           .media-add:hover,.media-form-button:hover,.media-edit:hover,.media-more:hover{background:var(--dsw-alias-interactive-bg-hover,#e9ebf0)}
-          .media-card-list{display:grid;gap:10px}
-          .media-card{position:relative;min-width:0;padding:16px;border:1px solid var(--dsw-alias-settings-card-stroke,#e2e5eb);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-settings-card-fill,#f7f8fa)}
-          .media-card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
-          .media-card-identity{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-width:0;padding-top:4px}
+          .media-card-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:10px}
+          .media-card{position:relative;display:flex;flex-direction:column;min-width:0;border:1px solid var(--dsw-alias-settings-card-stroke,#e2e5eb);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-settings-card-fill,#f7f8fa)}.media-card-body{flex:1;min-width:0;padding:16px 16px 18px}
+                    .media-card-identity{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-width:0;padding-top:4px}
           .media-card-identity strong{font-weight:600;overflow-wrap:anywhere}
           .media-badge{display:inline-flex;align-items:center;padding:1px 8px;border-radius:999px;color:var(--dsw-alias-brand-text,#4263d9);background:var(--dsw-alias-interactive-bg-hover-accent,#e8edff);font-size:12px;line-height:20px;font-weight:500}
-          .media-card-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}
+          .media-card-actions{display:flex;justify-content:flex-end;align-items:center;gap:4px;min-height:46px;padding:4px 10px;border-top:1px solid var(--dsw-alias-settings-card-stroke,#e2e5eb)}
           .media-edit,.media-more{display:inline-flex;align-items:center;justify-content:center;min-height:30px;border:0;border-radius:var(--dsw-radius-xs,4px);background:transparent}
           .media-edit{padding:0 9px;color:var(--dsw-alias-label-secondary,#5b6170)!important}
           .media-more{width:32px;letter-spacing:1px}
