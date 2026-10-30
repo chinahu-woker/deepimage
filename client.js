@@ -124,6 +124,7 @@ window.__ModuleLoader__.load({
       const busyRef = React.useRef(false)
       const [message, setMessage] = React.useState('')
       const [editing, setEditing] = React.useState(false)
+      const [sessionExpired, setSessionExpired] = React.useState(false)
       const submit = async event => {
         event.preventDefault()
         if (busyRef.current) return
@@ -141,30 +142,41 @@ window.__ModuleLoader__.load({
             setChallenge(null)
             const result = await configureNewApi(response.data, form, credentials)
             setEditing(false)
+            setSessionExpired(false)
             setMessage(`连接成功：已配置 ${result.images} 个图片模型和 ${result.videos} 个视频模型。`)
           }
         } catch (error) { setMessage(error.message || '连接失败，请稍后重试。') } finally { busyRef.current = false; setBusy(false) }
       }
       const refresh = async () => {
         if (busyRef.current) return
-        if (!newApiSession || newApiSession.id !== account.id || !(newApiSession.expiresAt > Date.now())) { setMessage('登录会话已过期，请重新登录后刷新余额。'); return }
         busyRef.current = true; setBusy(true); setMessage('')
         try {
+          if (!newApiSession || newApiSession.id !== account.id || !(newApiSession.expiresAt > Date.now() + 30000)) {
+            const response = await newApiRequest('/api/user/auth/refresh', { body: { userId: account.id } })
+            const session = response.data
+            if (session?.user?.id !== account.id || typeof session.access_token !== 'string' || !Number.isFinite(session.access_expires_at) || session.access_expires_at * 1000 <= Date.now()) throw new Error('登录会话无效，请重新登录。')
+            newApiSession = { token: session.access_token, id: account.id, expiresAt: session.access_expires_at * 1000 }
+          }
           const [self, status] = await Promise.all([newApiRequest('/api/user/self', { token: newApiSession.token }), newApiRequest('/api/status')])
           if (self.data?.id !== account.id) throw new Error('账户信息已变化，请重新登录。')
           const snapshot = form.getSnapshot()
           if (snapshot.value?.newApiAccount?.id !== account.id) throw new Error('当前账户已更换，请重试。')
           const ok = await form.mutate([{ op: 'set', path: ['newApiAccount'], value: newApiAccount(self.data, status.data) }], snapshot.revision)
           if (!ok) throw new Error('余额未更新，请重试。')
-        } catch (error) { setMessage(error.message || '刷新余额失败，请稍后重试。') } finally { busyRef.current = false; setBusy(false) }
+          setSessionExpired(false)
+        } catch (error) {
+          if (/登录会话.*(?:重新登录|失效|无效)/.test(error.message || '')) setSessionExpired(true)
+          setMessage(error.message || '刷新余额失败，请稍后重试。')
+        } finally { busyRef.current = false; setBusy(false) }
       }
+      React.useEffect(() => { if (account?.id) void refresh() }, [account?.id])
       if (account && !editing) {
         const name = account.displayName || account.username || 'New API 用户'
         const updated = Number.isFinite(account.updatedAt) ? new Date(account.updatedAt).toLocaleString('zh-CN', { hour12: false }) : ''
         return h('section', { className: 'media-newapi media-newapi-account', 'aria-label': 'New API 账户' },
           h('div', { className: 'media-account-head' },
             h('div', { className: 'media-account-avatar', 'aria-hidden': true }, Array.from(name.trim())[0]?.toUpperCase() || '?'),
-            h('div', { className: 'media-account-name' }, h('strong', null, name), account.username && account.username !== name && h('span', null, account.username), h('span', null, 'New API · 已连接')),
+            h('div', { className: 'media-account-name' }, h('strong', null, name), account.username && account.username !== name && h('span', null, account.username), h('span', null, sessionExpired ? 'New API · 需要重新登录' : 'New API · 已连接')),
             h('button', { type: 'button', className: 'media-form-button', disabled: busy, onClick: () => { setEditing(true); setMessage('') } }, '重新登录')),
           h('div', { className: 'media-account-balance' },
             h('div', null, h('span', { className: 'media-account-label' }, '可用余额'), h('strong', null, formatNewApiBalance(account)), updated && h('span', { className: 'media-account-updated' }, `更新于 ${updated}`)),

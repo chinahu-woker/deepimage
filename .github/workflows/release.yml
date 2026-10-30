@@ -25,7 +25,9 @@ jobs:
           npm run pack:plugin
           version=$(node -p 'require("./package.json").version')
           mv "dist/dsh-media-generation-${version}.tgz" "dist/deepimage-newapi-${version}.tgz"
+      - name: Include desktop installers
+        run: cp downloads/deepImage-installer-macOS.zip downloads/deepImage-installer-Windows.zip dist/
       - name: Create release with package
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/deepimage-newapi-*.tgz --title "deepImage New API 公司版 $GITHUB_REF_NAME" --latest=false --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" dist/deepimage-newapi-*.tgz dist/deepImage-installer-macOS.zip dist/deepImage-installer-Windows.zip --title "deepImage 桌面安装器 $GITHUB_REF_NAME" --latest=false --verify-tag --notes-file .github/release-notes-newapi.md

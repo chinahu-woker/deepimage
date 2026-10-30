@@ -21,19 +21,43 @@ class NewApiService extends Service {
   constructor(ctx) {
     super(ctx, 'deepImageNewApi')
     this.typertRemote = Object.freeze({ service: this, serviceKey: this.name, namespace: this.name })
+    this.sessionLocks = new Map()
+  }
+  async withSessionLock(id, action) {
+    const previous = this.sessionLocks.get(id) || Promise.resolve()
+    const current = previous.catch(() => {}).then(action)
+    this.sessionLocks.set(id, current)
+    try { return await current } finally {
+      if (this.sessionLocks.get(id) === current) this.sessionLocks.delete(id)
+    }
   }
   async request(input) {
     if (this.ctx.invocation?.peer?.principal?.kind !== 'owner') throw new Error('New API connection is available only to the host owner.')
-    const allowed = new Set(['/api/user/login', '/api/user/login/verify', '/api/user/self', '/api/status', '/api/pricing', '/api/token/search?keyword=deepImage&page_size=100', '/api/token/', '/v1/models'])
+    const refresh = input.path === '/api/user/auth/refresh'
+    const allowed = new Set(['/api/user/login', '/api/user/login/verify', '/api/user/auth/refresh', '/api/user/self', '/api/status', '/api/pricing', '/api/token/search?keyword=deepImage&page_size=100', '/api/token/', '/v1/models'])
     if (!allowed.has(input.path) && !/^\/api\/token\/[1-9]\d*\/key$/.test(input.path)) throw new Error('Unsupported New API request.')
-    const post = input.path === '/api/user/login' || input.path === '/api/user/login/verify' || input.path === '/api/token/' || /^\/api\/token\/[1-9]\d*\/key$/.test(input.path)
+    const post = input.path === '/api/user/login' || input.path === '/api/user/login/verify' || refresh || input.path === '/api/token/' || /^\/api\/token\/[1-9]\d*\/key$/.test(input.path)
     if ((post && !input.body) || (!post && input.body !== null)) throw new Error('Invalid New API request method.')
+    if (refresh) {
+      const id = input.body?.userId
+      if (!Number.isSafeInteger(id) || id <= 0 || Object.keys(input.body).length !== 1 || input.token) throw new Error('Invalid New API session request.')
+      return this.withSessionLock(id, async () => {
+        const stored = await this.ctx.credentials.resolve(credentialRef(`DEEPIMAGE_NEWAPI_SESSION_${id}`))
+        if (!stored?.value) throw new Error('未找到可恢复的登录会话，请重新登录。')
+        return this.fetchNewApi(input, { refreshCookie: stored.value, expectedId: id })
+      })
+    }
+    return this.fetchNewApi(input)
+  }
+  async fetchNewApi(input, { refreshCookie, expectedId } = {}) {
+    const refresh = input.path === '/api/user/auth/refresh'
+    const post = input.body !== null
     const response = await fetch('https://token.aikna.cn' + input.path, {
       method: post ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(30000),
-      headers: { Accept: 'application/json', ...(input.token ? { Authorization: `Bearer ${input.token}` } : {}), ...(post ? { 'Content-Type': 'application/json' } : {}) },
-      ...(post ? { body: JSON.stringify(input.body) } : {}),
+      headers: { Accept: 'application/json', ...(input.token ? { Authorization: `Bearer ${input.token}` } : {}), ...(post ? { 'Content-Type': 'application/json' } : {}), ...(refreshCookie ? { Cookie: `new_api_refresh=${refreshCookie}`, Origin: 'https://token.aikna.cn' } : {}) },
+      ...(post ? { body: JSON.stringify(refresh ? {} : input.body) } : {}),
     })
-    if (!response.ok) throw new Error(`New API request failed (HTTP ${response.status}).`)
+    if (!response.ok) throw new Error(refresh && (response.status === 401 || response.status === 403) ? '登录会话已失效，请重新登录。' : `New API request failed (HTTP ${response.status}).`)
     const length = Number(response.headers.get('content-length'))
     if (Number.isFinite(length) && length > 4 * 1024 * 1024) { await response.body?.cancel(); throw new Error('New API response is too large.') }
     if (!response.body) throw new Error('New API returned an empty response.')
@@ -44,7 +68,19 @@ class NewApiService extends Service {
       if (total > 4 * 1024 * 1024) throw new Error('New API response is too large.')
       chunks.push(chunk)
     }
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    const result = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    const login = input.path === '/api/user/login' || input.path === '/api/user/login/verify'
+    if ((login || refresh) && result?.success !== false && result?.data?.access_token) {
+      const id = result.data.user?.id
+      if (!Number.isSafeInteger(id) || id <= 0 || (refresh && id !== expectedId)) throw new Error('New API session account mismatch.')
+      const cookies = typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [response.headers.get('set-cookie') || '']
+      const cookie = cookies.map(value => value.match(/(?:^|,\s*)new_api_refresh=([^;\s,]+)/)?.[1]).find(Boolean)
+      if (!cookie || cookie.length > 2048 || !/^[A-Za-z0-9._~%+-]+$/.test(cookie)) throw new Error('未收到有效的登录会话，请检查 New API 配置。')
+      const save = () => this.ctx.credentials.set(credentialRef(`DEEPIMAGE_NEWAPI_SESSION_${id}`), cookie)
+      if (refresh) await save()
+      else await this.withSessionLock(id, save)
+    }
+    return result
   }
 }
 

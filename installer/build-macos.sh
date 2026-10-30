@@ -3,7 +3,7 @@
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 git_bin=${GIT_BIN:-git}
-out_dir="$root/dist"
+out_dir=${DEEPIMAGE_OUTPUT_DIR:-"$root/dist"}
 mac_zip="$out_dir/deepImage-installer-macOS.zip"
 win_zip="$out_dir/deepImage-installer-Windows.zip"
 if [ -e "$mac_zip" ] || [ -e "$win_zip" ]; then
