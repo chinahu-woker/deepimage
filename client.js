@@ -121,7 +121,7 @@ window.__ModuleLoader__.load({
       return `${symbol}${new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(account.quota / account.quotaPerUnit * rate)}`
     }
 
-    function NewApiLogin({ form, credentials, account, onBusyChange }) {
+    function NewApiLogin({ form, credentials, account, onBusyChange, editing, setEditing }) {
       const [username, setUsername] = React.useState('')
       const [password, setPassword] = React.useState('')
       const [code, setCode] = React.useState('')
@@ -130,8 +130,7 @@ window.__ModuleLoader__.load({
       const busyRef = React.useRef(false)
       const setAccountBusy = value => { setBusy(value); onBusyChange(value) }
       const [message, setMessage] = React.useState('')
-      const [editing, setEditing] = React.useState(false)
-      const [sessionExpired, setSessionExpired] = React.useState(false)
+      const [sessionExpired, setSessionExpired] = React.useState(null)
       const submit = async event => {
         event.preventDefault()
         if (busyRef.current) return
@@ -178,6 +177,7 @@ window.__ModuleLoader__.load({
           })
         } catch (error) {
           if (/登录会话.*(?:重新登录|失效|无效)/.test(error.message || '')) setSessionExpired(true)
+          else setSessionExpired(null)
           setMessage(error.message || '刷新余额失败，请稍后重试。')
         } finally { busyRef.current = false; setAccountBusy(false) }
       }
@@ -209,12 +209,13 @@ window.__ModuleLoader__.load({
         h('svg', { viewBox: '0 0 24 24', width: 18, height: 18, fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, ...paths.map((d, index) => h('path', { d, key: index }))))
       React.useEffect(() => { if (account?.id) void refresh() }, [account?.id])
       if (account && !editing) {
-        const name = account.displayName || account.username || 'New API 用户'
+        const name = account.username || 'New API 用户'
+        const connection = sessionExpired === null ? '连接状态待确认' : sessionExpired ? '需要重新登录' : '已连接'
         const updated = Number.isFinite(account.updatedAt) ? new Date(account.updatedAt).toLocaleString('zh-CN', { hour12: false }) : ''
         return h('section', { className: 'media-newapi media-newapi-account', 'aria-label': 'New API 账户' },
           h('div', { className: 'media-account-main' },
-            h('div', { className: 'media-account-avatar', 'aria-hidden': true }, Array.from(name.trim())[0]?.toUpperCase() || '?'),
-            h('div', { className: 'media-account-name' }, h('strong', null, name), account.username && account.username !== name && h('span', null, account.username), h('span', null, sessionExpired ? 'New API · 需要重新登录' : 'New API · 已连接')),
+            h('div', { className: 'media-account-avatar' }, h('span', { 'aria-hidden': true }, Array.from(name.trim())[0]?.toUpperCase() || '?'), h('span', { className: `media-account-indicator ${sessionExpired === false ? 'is-connected' : sessionExpired === true ? 'is-expired' : ''}`, role: 'img', 'aria-label': connection, title: connection })),
+            h('div', { className: 'media-account-name' }, h('strong', null, name)),
             h('div', { className: 'media-account-balance' }, h('span', { className: 'media-account-label' }, '可用余额'), h('strong', null, formatNewApiBalance(account)), updated && h('span', { className: 'media-account-updated' }, `更新于 ${updated}`)),
             h('div', { className: 'media-account-actions' },
               icon('刷新余额', ['M20 7v5h-5', 'M4 17v-5h5', 'M5.6 9a7 7 0 0 1 11.9-2L20 12', 'M4 12l2.5 5a7 7 0 0 0 11.9-2'], refresh),
@@ -375,6 +376,7 @@ window.__ModuleLoader__.load({
       const [openMenu, setOpenMenu] = React.useState(null)
       const [activeKind, setActiveKind] = React.useState('image')
       const [accountBusy, setAccountBusy] = React.useState(false)
+      const [accountEditing, setAccountEditing] = React.useState(false)
       const value = snapshot.value || {}
       const shownKind = value.newApiAccount ? activeKind : 'settings'
       React.useEffect(() => { if (!value.newApiAccount) { setEditor(null); setSecret(''); setError('') } }, [value.newApiAccount?.id])
@@ -508,14 +510,14 @@ window.__ModuleLoader__.load({
           .media-form-actions{display:flex;justify-content:flex-end;gap:8px}.media-form-primary{background:var(--dsw-alias-button-primary-fill,#4d6bfe);color:var(--dsw-alias-label-primary-inverted,#fff)!important;border-color:transparent}.media-form-primary:hover{opacity:.9}
           .media-error{margin-top:16px!important;color:var(--dsw-alias-label-danger,#c44);white-space:pre-wrap}
           .media-newapi{display:grid;gap:12px;margin-top:20px;padding:16px;border:1px solid var(--dsw-alias-settings-card-stroke,#e2e5eb);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-settings-card-fill,#f7f8fa)}.media-newapi h3{font-weight:600}.media-newapi p{color:var(--dsw-alias-label-secondary,#6b7280);font-size:13px}.media-newapi label{display:grid;gap:4px;color:var(--dsw-alias-label-secondary,#6b7280)}.media-newapi input{box-sizing:border-box;width:100%;padding:8px 10px;border:1px solid var(--dsw-alias-border-l3,#d9dce3);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1,transparent)}.media-newapi-actions{display:flex;gap:8px}
-          .media-newapi-account{gap:10px}.media-account-main{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.media-account-avatar{display:flex;align-items:center;justify-content:center;flex:none;width:48px;height:48px;border-radius:50%;background:var(--dsw-alias-interactive-bg-hover-accent,#e8edff);color:var(--dsw-alias-brand-text,#4263d9);font-size:20px;font-weight:600}.media-account-name{display:grid;gap:1px;flex:1 1 125px;min-width:0;overflow-wrap:anywhere}.media-account-name strong{font-size:16px}.media-account-name span,.media-account-label,.media-account-updated{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280)}.media-account-balance{display:grid;gap:1px;min-width:115px}.media-account-balance strong{font-size:19px;line-height:26px;font-variant-numeric:tabular-nums}.media-account-updated{font-size:11px}.media-account-actions{display:flex;align-items:center;gap:4px}.media-account-icon{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:1px solid var(--dsw-alias-border-l3,#d9dce3);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1,transparent)}.media-account-icon:hover{background:var(--dsw-alias-interactive-bg-hover,#e9ebf0)}.media-account-icon:active{transform:translateY(1px)}
+          .media-newapi-account{gap:10px;position:relative}.media-account-main{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding-right:122px}.media-account-avatar{position:relative;display:flex;align-items:center;justify-content:center;flex:none;width:48px;height:48px;border-radius:50%;background:var(--dsw-alias-interactive-bg-hover-accent,#e8edff);color:var(--dsw-alias-brand-text,#4263d9);font-size:20px;font-weight:600}.media-account-indicator{position:absolute;right:-1px;bottom:-1px;width:12px;height:12px;box-sizing:border-box;border:2px solid var(--dsw-alias-settings-card-fill,#fff);border-radius:50%;background:#a0a6b2}.media-account-indicator.is-connected{background:#22b66a}.media-account-indicator.is-expired{background:#e38a38}.media-account-name{display:grid;gap:1px;flex:1 1 125px;min-width:0;overflow-wrap:anywhere}.media-account-name strong{font-size:16px}.media-account-name span,.media-account-label,.media-account-updated{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280)}.media-account-balance{display:grid;gap:1px;min-width:115px}.media-account-balance strong{font-size:19px;line-height:26px;font-variant-numeric:tabular-nums}.media-account-updated{font-size:11px}.media-account-actions{position:absolute;right:16px;top:16px;display:flex;align-items:center;gap:4px}.media-account-icon{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:1px solid var(--dsw-alias-border-l3,#d9dce3);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1,transparent)}.media-account-icon:hover{background:var(--dsw-alias-interactive-bg-hover,#e9ebf0)}.media-account-icon:active{transform:translateY(1px)}
 
           @media(max-width:600px){.media-settings{padding:16px}.media-card-meta{grid-template-columns:1fr;gap:8px}.media-heading{align-items:flex-start}.media-section-description{max-width:28ch}}
         `),
         h('h2', null, 'deepImage'),
         h('p', { className: 'media-intro' }, '管理图片和视频服务商，选择用于自动绘图的默认服务商。'),
-        snapshot.status === 'ready' && h('div', { hidden: !!editor }, h(NewApiLogin, { form, credentials, account: value.newApiAccount, onBusyChange: setAccountBusy })),
-        !editor && snapshot.status === 'ready' && h('div', { className: 'media-tabs', role: 'tablist', 'aria-label': 'deepImage 页面' },
+        snapshot.status === 'ready' && h('div', { hidden: !!editor }, h(NewApiLogin, { form, credentials, account: value.newApiAccount, onBusyChange: setAccountBusy, editing: accountEditing, setEditing: setAccountEditing })),
+        !editor && !accountEditing && value.newApiAccount && snapshot.status === 'ready' && h('div', { className: 'media-tabs', role: 'tablist', 'aria-label': 'deepImage 页面' },
           ...(value.newApiAccount ? [['image', '绘图'], ['video', '视频'], ['settings', '设置']] : [['settings', '设置']]).map(([kind, label]) => h('button', {
             key: kind, id: `media-tab-${kind}`, type: 'button', className: 'media-tab', role: 'tab', 'aria-selected': shownKind === kind,
             'aria-controls': kind === 'settings' ? 'media-settings-panel' : 'media-provider-panel', tabIndex: shownKind === kind ? 0 : -1,
@@ -529,8 +531,8 @@ window.__ModuleLoader__.load({
               e.currentTarget.parentElement.querySelector(`[data-media-kind="${next}"]`)?.focus()
             }, 'data-media-kind': kind,
           }, label))),
-        snapshot.status !== 'ready' ? h('p', null, snapshot.status === 'loading' ? '正在加载配置…' : '配置暂不可用。') : value.newApiAccount && !editor && shownKind !== 'settings' && h('div', { id: 'media-provider-panel', role: 'tabpanel', 'aria-labelledby': `media-tab-${shownKind}` }, section(shownKind, shownKind === 'image' ? '绘图服务商' : '视频服务商')),
-        snapshot.status === 'ready' && h('div', { id: 'media-settings-panel', role: 'tabpanel', 'aria-labelledby': 'media-tab-settings', hidden: !!editor || shownKind !== 'settings' }, h(UpdatePanel)),
+        snapshot.status !== 'ready' ? h('p', null, snapshot.status === 'loading' ? '正在加载配置…' : '配置暂不可用。') : value.newApiAccount && !editor && !accountEditing && shownKind !== 'settings' && h('div', { id: 'media-provider-panel', role: 'tabpanel', 'aria-labelledby': `media-tab-${shownKind}` }, section(shownKind, shownKind === 'image' ? '绘图服务商' : '视频服务商')),
+        snapshot.status === 'ready' && h('div', { id: 'media-settings-panel', role: 'tabpanel', 'aria-labelledby': 'media-tab-settings', hidden: !!editor || accountEditing || !value.newApiAccount || shownKind !== 'settings' }, h(UpdatePanel)),
         value.newApiAccount && error && h('p', { className: 'media-error', role: 'alert' }, error),
         value.newApiAccount && editor && h('form', { className: 'media-form', onSubmit: save },
           h('h3', null, `${editor.index === null ? '添加' : '编辑'}${editor.kind === 'image' ? '绘图' : '视频'}服务商`),
