@@ -16,6 +16,12 @@
   <a href="LICENSE">MIT 许可证</a>
 </p>
 
+## 选择版本
+
+当前页面介绍 **New API 公司版**：登录 AIKNA 后自动配置兼容模型。[开源版](https://github.com/chinahu-woker/deepimage/tree/main) 可手动配置图片和视频服务商，适合使用自己的 API 服务。
+
+两个版本使用相同的插件标识，请根据需要选择其一安装。公司版的发布标签以 `newapi-v` 开头，开源版以 `v` 开头；下载 Release 时请留意安装包名称。
+
 ## 功能一览
 
 - **对话生图**：选择默认绘图模型后，直接在对话中描述想要的画面。
@@ -74,9 +80,9 @@ mkdir -p dist
 npm run pack:plugin
 ```
 
-生成的 `.tgz` 可以通过 `dsh plugin --profile web add ./dsh-media-generation-0.1.0.tgz` 安装。已有 Release 不一定包含本分支的最新功能，请以 Release 对应的版本为准。
+本地打包生成 `dsh-media-generation-<版本号>.tgz`，可通过 `dsh plugin --profile web add <安装包路径>` 安装。已有 Release 不一定包含本分支的最新功能，请以 Release 对应的版本为准。
 
-发布时，先更新 `package.json` 的版本号并提交，再推送与版本一致的 Git 标签（例如 `v0.1.0`）。GitHub Actions 会打包并创建包含 `.tgz` 的 Release。私有仓库的 Release 和安装包遵循仓库访问权限。
+公司版在 `newapi-login` 分支维护：更新 `package.json` 版本并提交后，推送对应标签（例如 `newapi-v0.1.0`）。GitHub Actions 会生成名为 `deepimage-newapi-<版本号>.tgz` 的 Release 安装包，并保留开源版的 Latest 标记。开源版的标签和发布步骤见 [开源版说明](https://github.com/chinahu-woker/deepimage/tree/main#打包与发布)。仓库和 Release 的可见性遵循 GitHub 仓库访问权限。
 
 ## 许可证
 

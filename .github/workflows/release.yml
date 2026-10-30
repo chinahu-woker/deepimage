@@ -1,9 +1,9 @@
-name: Build and publish plugin package
+name: Build and publish New API plugin
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'newapi-v*'
 
 permissions:
   contents: write
@@ -18,12 +18,14 @@ jobs:
           node-version: '22'
           package-manager-cache: false
       - name: Check release version
-        run: node -e 'if (process.env.GITHUB_REF_NAME !== "v" + require("./package.json").version) { console.error("Tag must match package.json version"); process.exit(1) }'
+        run: node -e 'if (process.env.GITHUB_REF_NAME !== "newapi-v" + require("./package.json").version) { console.error("New API tag must match newapi-v<package.json version>"); process.exit(1) }'
       - name: Package plugin
         run: |
           mkdir -p dist
           npm run pack:plugin
+          version=$(node -p 'require("./package.json").version')
+          mv "dist/dsh-media-generation-${version}.tgz" "dist/deepimage-newapi-${version}.tgz"
       - name: Create release with package
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/*.tgz --title "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" dist/deepimage-newapi-*.tgz --title "deepImage New API 公司版 $GITHUB_REF_NAME" --latest=false --generate-notes
