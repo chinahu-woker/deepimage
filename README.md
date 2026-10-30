@@ -33,8 +33,8 @@
 
 下载并解压安装器，打开后可选择开源版或 New API 公司版：
 
-- [下载 macOS 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.5/deepImage-installer-macOS.zip)
-- [下载 Windows 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.5/deepImage-installer-Windows.zip)
+- [下载 macOS 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.6/deepImage-installer-macOS.zip)
+- [下载 Windows 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.6/deepImage-installer-Windows.zip)
 
 安装前请先启动一次 DeepSeek Harness 桌面版，再完全退出。macOS 双击「安装 deepImage.app」；Windows 双击 `Install deepImage.cmd`。安装可能需要联网。
 
