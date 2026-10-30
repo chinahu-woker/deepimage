@@ -10,6 +10,7 @@ assert.ok(start >= 0 && end > start)
 const code = source.slice(start, end) + '\nglobalThis.NewApiService = NewApiService'
 const stored = new Map()
 let revoked = false
+let forbidden = false
 let expectedCookie = 'refresh-1'
 let refreshCount = 0
 let logoutFailure = false
@@ -28,10 +29,12 @@ const context = {
       return new Response(JSON.stringify({ success: true }), { status: 200 })
     }
     if (route === '/api/user/auth/refresh') {
+      if (forbidden) return new Response('', { status: 403 })
       if (revoked || options.headers.Cookie !== `new_api_refresh=${expectedCookie}`) return new Response('', { status: 401 })
       expectedCookie = `refresh-${++refreshCount + 1}`
       return new Response(JSON.stringify({ success: true, data: { user: { id: 42 }, access_token: `access-${refreshCount + 1}` } }), { headers: { 'set-cookie': `new_api_refresh=${expectedCookie}; HttpOnly; Secure` } })
     }
+    if (route === '/api/user/self' || route === '/v1/models') return new Response('', { status: 401 })
     throw new Error(`Unexpected route ${route}`)
   },
 }
@@ -83,8 +86,19 @@ const request = (path, body) => ({ path, token: '', body })
   assert.equal(logoutCount, 2)
   await assert.rejects(() => restarted.request(request('/api/user/auth/refresh', { userId: 42 })), /未找到可恢复/)
   stored.set('DEEPIMAGE_NEWAPI_SESSION_42', expectedCookie)
+  stored.set('DEEPIMAGE_NEWAPI_42', 'api-key')
+  forbidden = true
+  await assert.rejects(() => restarted.request(request('/api/user/auth/refresh', { userId: 42 })), /HTTP 403/)
+  assert.equal(stored.get('DEEPIMAGE_NEWAPI_42'), 'api-key')
+  forbidden = false
+  await assert.rejects(() => restarted.request({ path: '/api/user/self', token: 'access', body: null }), /登录会话已失效/)
+  await assert.rejects(() => restarted.request({ path: '/v1/models', token: 'api-key', body: null }), /HTTP 401/)
   revoked = true
   await assert.rejects(() => restarted.request(request('/api/user/auth/refresh', { userId: 42 })), /登录会话已失效/)
   await assert.rejects(() => restarted.request(request('/api/user/auth/refresh', { userId: 99 })), /未找到可恢复/)
+  await restarted.request(request('/api/user/auth/forget', { userId: 42 }))
+  assert.equal(stored.has('DEEPIMAGE_NEWAPI_SESSION_42'), false)
+  assert.equal(stored.has('DEEPIMAGE_NEWAPI_42'), false)
+  assert.equal(logoutCount, 2)
   console.log('New API session checks passed: saved, restored after restart, rotated safely, logged out and handled expiry.')
 })().catch(error => { console.error(error); process.exitCode = 1 })

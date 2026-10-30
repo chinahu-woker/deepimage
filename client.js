@@ -18,6 +18,7 @@ window.__ModuleLoader__.load({
     const newApiBase = 'https://token.aikna.cn'
     let newApiRemote
     let newApiSession
+    let newApiNotice = ''
     const newApiCodec = { mode: 'strict', typeSymbol: 'deepimage#newapi-request', create: () => ({ parse: value => value }) }
     const newApiDescriptor = { id: 'deepimage/newapi-request', service: 'deepImageNewApi', namespace: 'deepImageNewApi', method: 'request', invocation: { kind: 'direct' }, parameters: [{ name: 'request', wire: 'request', source: 'json', codec: newApiCodec }], result: { mode: 'strict', typeSymbol: 'deepimage#newapi-response', create: () => ({ parse: value => value }) } }
     async function newApiRequest(path, { token, body } = {}) {
@@ -56,7 +57,7 @@ window.__ModuleLoader__.load({
           const seen = new Set()
           const models = list.filter(item => !seen.has(item.model_name) && seen.add(item.model_name)).map(item => existing?.models?.find(model => model.id === item.model_name) || { id: item.model_name })
           count += models.length
-          ops.push({ op: 'set', path: ['providers', id], value: { displayName: route.displayName, defaultContextWindow: 32768, defaultMaxTokens: 4096, ...existing, apiKeyEnv: `DEEPIMAGE_NEWAPI_${userId}`, baseURL: `${newApiBase}/v1`, api: route.api, models } })
+          ops.push({ op: 'set', path: ['providers', id], value: { displayName: route.displayName, defaultContextWindow: 32768, defaultMaxTokens: 4096, timeoutMs: 300000, streamIdleTimeoutMs: 300000, ...existing, apiKeyEnv: `DEEPIMAGE_NEWAPI_${userId}`, baseURL: `${newApiBase}/v1`, api: route.api, models } })
         } else if (existing) ops.push({ op: 'unset', path: ['providers', id] })
       }
       if (ops.length && !await modelForm.mutate(ops, snapshot.revision)) throw new Error('对话模型配置未保存，可能已被其他页面修改，请重试。')
@@ -104,8 +105,8 @@ window.__ModuleLoader__.load({
       if (snapshot.status !== 'ready' || !snapshot.writable) throw new Error('当前配置不可写，请稍后重试。')
       const current = snapshot.value || {}
       if (expectedAccountId && current.newApiAccount?.id !== expectedAccountId) throw new Error('当前账户已更换，请重新同步。')
-      const imageProviders = (current.imageProviders || []).filter(item => !item.id.startsWith(prefix))
-      const videoProviders = (current.videoProviders || []).filter(item => !item.id.startsWith(prefix))
+      const imageProviders = (current.imageProviders || []).filter(item => !item.id.startsWith(prefix) && (item.apiKeyEnv !== ref || imageModels.some(model => model.model_name === item.model)))
+      const videoProviders = (current.videoProviders || []).filter(item => !item.id.startsWith(prefix) && (item.apiKeyEnv !== ref || videoModels.some(model => model.model_name === item.model)))
       for (const item of imageModels) {
         const id = `${prefix}image:${item.model_name}`
         const previous = (current.imageProviders || []).find(provider => provider.id === id)
@@ -116,6 +117,7 @@ window.__ModuleLoader__.load({
         const previous = (current.videoProviders || []).find(provider => provider.id === id)
         videoProviders.push({ ...defaults('video'), endpoint: `${newApiBase}/v1/videos`, statusEndpointTemplate: `${newApiBase}/v1/videos/{taskId}`, protocol: 'newapi-video', taskIdPath: 'id', statusPath: 'status', successStatuses: ['completed'], failureStatuses: ['failed', 'cancelled', 'expired'], ...previous, id, model: item.model_name, apiKeyEnv: ref })
       }
+      if (!expectedAccountId && current.newApiAccount?.id !== userId) await writeChatRoutes(modelForm, userId, [], true)
       const saved = await credentials.set(ref, key)
       if (!saved.ok) throw new Error(saved.error?.message || 'API 密钥保存失败。')
       const oldDefault = current.defaultImageProvider
@@ -126,6 +128,7 @@ window.__ModuleLoader__.load({
       const [selfResult, statusResult] = accountInfo
         ? [{ status: 'fulfilled', value: { data: accountInfo.user } }, { status: 'fulfilled', value: { data: accountInfo.status } }]
         : await Promise.allSettled([newApiRequest('/api/user/self', { token }), newApiRequest('/api/status')])
+      if (selfResult.status === 'rejected' && isExpiredNewApiSession(selfResult.reason)) throw selfResult.reason
       const self = selfResult.status === 'fulfilled' && selfResult.value.data?.id === userId ? selfResult.value.data : bundle.user
       const modelSnapshot = modelForm.getSnapshot()
       const oldAccount = current.newApiAccount
@@ -206,7 +209,48 @@ window.__ModuleLoader__.load({
       return `${symbol}${new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(account.quota / account.quotaPerUnit * rate)}`
     }
 
-    function NewApiLogin({ form, credentials, modelForm, modelReady, account, onBusyChange, editing, setEditing }) {
+    function isExpiredNewApiSession(error) {
+      return ['登录会话已失效，请重新登录。', '未找到可恢复的登录会话，请重新登录。', '登录会话无效，请重新登录。', '账户信息已变化，请重新登录。'].includes(error?.message)
+    }
+
+    async function ensureChatTimeouts(form, modelForm, userId) {
+      if (form.getSnapshot().value?.newApiAccount?.id !== userId || typeof modelForm.getSnapshot !== 'function') return
+      const snapshot = modelForm.getSnapshot()
+      if (snapshot.status !== 'ready' || !snapshot.writable) return
+      const ops = []
+      for (const route of chatRoutes) {
+        const id = chatRouteId(userId, route.id)
+        const profile = snapshot.value?.providers?.[id]
+        if (!managedChatRoute(profile) || profile.apiKeyEnv !== `DEEPIMAGE_NEWAPI_${userId}`) continue
+        if (profile.timeoutMs !== undefined && profile.streamIdleTimeoutMs !== undefined) continue
+        ops.push({ op: 'set', path: ['providers', id], value: { timeoutMs: 300000, streamIdleTimeoutMs: 300000, ...profile } })
+      }
+      if (ops.length && !await modelForm.mutate(ops, snapshot.revision)) throw new Error('对话模型超时配置未保存。')
+    }
+
+    async function clearExpiredNewApiAccount(form, modelForm, userId) {
+      const before = form.getSnapshot()
+      if (before.value?.newApiAccount?.id !== userId) return ''
+      if (before.status !== 'ready' || !before.writable) throw new Error('登录已失效，但当前配置不可写，请检查配置后重试。')
+      await newApiRequest('/api/user/auth/forget', { body: { userId } })
+      newApiSession = null
+      let routeError = ''
+      try { await writeChatRoutes(modelForm, userId, [], true) }
+      catch (error) { if (before.value.newApiAccount.chatRoutesManaged || before.value.newApiAccount.chatSyncVersion === 1) routeError = error.message || '对话模型配置未移除。' }
+      newApiNotice = routeError ? `登录已失效，请重新登录；${routeError}` : '登录已失效，请重新登录。'
+      let saved = false
+      for (let attempt = 0; attempt < 3 && !saved; attempt++) {
+        const snapshot = form.getSnapshot()
+        if (!snapshot.value?.newApiAccount) { saved = true; break }
+        if (snapshot.value.newApiAccount.id !== userId) return ''
+        if (!snapshot.writable) break
+        saved = await form.mutate([{ op: 'set', path: ['newApiAccount'], value: null }], snapshot.revision)
+      }
+      if (!saved) throw new Error('登录已失效，但退出状态未保存，请检查配置后重试。')
+      return routeError
+    }
+
+    function NewApiLogin({ form, credentials, modelForm, modelReady, account, onBusyChange, background = false }) {
       const [username, setUsername] = React.useState('')
       const [password, setPassword] = React.useState('')
       const [code, setCode] = React.useState('')
@@ -215,7 +259,7 @@ window.__ModuleLoader__.load({
       const busyRef = React.useRef(false)
       const retryAccount = React.useRef(null)
       const setAccountBusy = value => { setBusy(value); onBusyChange(value) }
-      const [message, setMessage] = React.useState('')
+      const [message, setMessage] = React.useState(() => newApiNotice)
       const [sessionExpired, setSessionExpired] = React.useState(null)
       const submit = async event => {
         event.preventDefault()
@@ -233,40 +277,67 @@ window.__ModuleLoader__.load({
             setChallenge(response.data)
           } else {
             setChallenge(null)
-            const result = await configureNewApi(response.data, form, credentials, modelForm)
-            setEditing(false)
+            let result
+            try { result = await configureNewApi(response.data, form, credentials, modelForm) }
+            catch (error) {
+              const id = response.data?.user?.id
+              if (Number.isSafeInteger(id) && id > 0 && form.getSnapshot().value?.newApiAccount?.id !== id) {
+                try { await newApiRequest('/api/user/auth/forget', { body: { userId: id } }) }
+                catch { throw new Error('登录配置失败，且本地登录凭据未清理，请重试。') }
+              }
+              throw error
+            }
+            newApiNotice = ''
             setSessionExpired(false)
             setMessage(result.chatError ? `连接成功，图片和视频模型已配置；对话模型同步失败：${result.chatError}` : `连接成功：已同步 ${result.chats} 个对话模型、${result.images} 个图片模型和 ${result.videos} 个视频模型。`)
           }
           })
-        } catch (error) { setMessage(error.message || '连接失败，请稍后重试。') } finally { busyRef.current = false; setAccountBusy(false) }
+        } catch (error) { setChallenge(null); setPassword(''); setCode(''); setMessage(error.message || '连接失败，请稍后重试。') } finally { busyRef.current = false; setAccountBusy(false) }
       }
       const refresh = async (mode = 'restore') => {
         if (busyRef.current) return
         busyRef.current = true; setAccountBusy(true); setMessage(mode === 'sync' ? '正在同步模型…' : mode === 'balance' ? '正在刷新余额…' : '')
         try {
           await withNewApiLock(async () => {
-          if (!newApiSession || newApiSession.id !== account.id || !(newApiSession.expiresAt > Date.now() + 30000)) {
+          try {
+          const restoreSession = async () => {
             const response = await newApiRequest('/api/user/auth/refresh', { body: { userId: account.id } })
             const session = response.data
             if (session?.user?.id !== account.id || typeof session.access_token !== 'string' || !Number.isFinite(session.access_expires_at) || session.access_expires_at * 1000 <= Date.now()) throw new Error('登录会话无效，请重新登录。')
             newApiSession = { token: session.access_token, id: account.id, expiresAt: session.access_expires_at * 1000 }
           }
-          const activeSession = newApiSession
-          const [self, status] = await Promise.all([newApiRequest('/api/user/self', { token: activeSession.token }), newApiRequest('/api/status')])
+          if (!newApiSession || newApiSession.id !== account.id || !(newApiSession.expiresAt > Date.now() + 30000)) await restoreSession()
+          let activeSession = newApiSession
+          let self
+          try { self = await newApiRequest('/api/user/self', { token: activeSession.token }) }
+          catch (error) {
+            if (!isExpiredNewApiSession(error)) throw error
+            await restoreSession()
+            activeSession = newApiSession
+            self = await newApiRequest('/api/user/self', { token: activeSession.token })
+          }
           if (self.data?.id !== account.id) throw new Error('账户信息已变化，请重新登录。')
           const snapshot = form.getSnapshot()
           if (snapshot.value?.newApiAccount?.id !== account.id) throw new Error('当前登录会话已更换，请刷新页面。')
+          try { await ensureChatTimeouts(form, modelForm, account.id) } catch { /* Retry on the next session check. */ }
+          if (mode === 'background') { setSessionExpired(false); return }
+          const status = await newApiRequest('/api/status')
           const ok = await form.mutate([{ op: 'set', path: ['newApiAccount'], value: { ...newApiAccount(self.data, status.data), chatSyncVersion: snapshot.value.newApiAccount.chatSyncVersion || 0, chatRoutesManaged: !!snapshot.value.newApiAccount.chatRoutesManaged } }], snapshot.revision)
           if (!ok) throw new Error('余额未更新，请重试。')
           setSessionExpired(false)
           if (mode === 'sync') {
             const result = await configureNewApi({ access_token: activeSession.token, access_expires_at: activeSession.expiresAt / 1000, user: self.data }, form, credentials, modelForm, account.id, { user: self.data, status: status.data })
             setMessage(result.chatError ? `图片和视频模型已更新；对话模型同步失败：${result.chatError}` : `模型同步完成：${result.chats} 个对话模型、${result.images} 个图片模型、${result.videos} 个视频模型。`)
-          } else if (account.chatSyncVersion !== 1) {
+          } else if (snapshot.value.newApiAccount.chatSyncVersion !== 1) {
             const chats = await syncExistingChat({ access_token: activeSession.token, access_expires_at: activeSession.expiresAt / 1000, user: self.data }, form, credentials, modelForm)
             setMessage(`已同步 ${chats} 个对话模型。`)
           } else if (mode === 'balance') setMessage('余额已更新。')
+          } catch (error) {
+            if (!isExpiredNewApiSession(error)) throw error
+            const routeError = await clearExpiredNewApiAccount(form, modelForm, account.id)
+            setSessionExpired(false); setChallenge(null); setPassword(''); setCode('')
+            setMessage(routeError ? `登录已失效，请重新登录；${routeError}` : '登录已失效，请重新登录。')
+          }
           })
         } catch (error) {
           if (/登录会话.*(?:重新登录|失效|无效)/.test(error.message || '')) setSessionExpired(true)
@@ -296,7 +367,8 @@ window.__ModuleLoader__.load({
             saved = await form.mutate([{ op: 'set', path: ['newApiAccount'], value: null }], snapshot.revision)
           }
           if (!saved) throw new Error('会话已退出，但配置未保存，请再次点击退出登录。')
-          setEditing(false); setChallenge(null); setPassword(''); setCode(''); setSessionExpired(false)
+          newApiNotice = ''
+          setChallenge(null); setPassword(''); setCode(''); setSessionExpired(false)
           setMessage(routeError ? `已退出登录；${routeError}` : '已退出登录。')
           })
         } catch (error) { newApiSession = null; setSessionExpired(true); setMessage(error.message || '退出登录失败，请稍后重试。') }
@@ -306,12 +378,18 @@ window.__ModuleLoader__.load({
         h('svg', { viewBox: '0 0 24 24', width: 18, height: 18, fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, ...paths.map((d, index) => h('path', { d, key: index }))))
       React.useEffect(() => { if (account?.id) void refresh() }, [account?.id])
       React.useEffect(() => {
+        if (!background || !account?.id) return
+        const timer = setInterval(() => { void refresh('background') }, 60000)
+        return () => clearInterval(timer)
+      }, [account?.id, background])
+      React.useEffect(() => { if (!account?.id && newApiNotice) setMessage(newApiNotice) }, [account?.id])
+      React.useEffect(() => {
         if (account?.id && account.chatSyncVersion !== 1 && modelReady && !busy && !busyRef.current && retryAccount.current !== account.id) {
           retryAccount.current = account.id
           void refresh()
         }
       }, [account?.id, account?.chatSyncVersion, modelReady, busy])
-      if (account && !editing) {
+      if (account) {
         const name = account.username || 'New API 用户'
         const connection = sessionExpired === null ? '连接状态待确认' : sessionExpired ? '需要重新登录' : '已连接'
         const updated = Number.isFinite(account.updatedAt) ? new Date(account.updatedAt).toLocaleString('zh-CN', { hour12: false }) : ''
@@ -323,7 +401,6 @@ window.__ModuleLoader__.load({
             h('div', { className: 'media-account-actions' },
               icon('刷新余额', ['M20 7v5h-5', 'M4 17v-5h5', 'M5.6 9a7 7 0 0 1 11.9-2L20 12', 'M4 12l2.5 5a7 7 0 0 0 11.9-2'], () => refresh('balance')),
               icon('同步模型', ['M4 7h10', 'M11 4l3 3-3 3', 'M20 17H10', 'M13 14l-3 3 3 3', 'M18 4v6', 'M15 7h6', 'M4 14v6'], () => refresh('sync')),
-              icon('重新登录', ['M20 11a8 8 0 1 0-2.5 5.8', 'M20 4v7h-7', 'M12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6', 'M7.8 18a5 5 0 0 1 8.4 0'], () => { setEditing(true); setMessage('') }),
               icon('退出登录', ['M10 17l5-5-5-5', 'M15 12H3', 'M12 3h6a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3h-6'], logout))),
           message && h('p', { role: 'status' }, message))
       }
@@ -333,8 +410,15 @@ window.__ModuleLoader__.load({
           : h(React.Fragment, null,
               h('label', null, '用户名或邮箱', h('input', { required: true, autoComplete: 'username', value: username, onChange: e => setUsername(e.target.value) })),
               h('label', null, '密码', h('input', { required: true, type: 'password', autoComplete: 'current-password', value: password, onChange: e => setPassword(e.target.value) }))),
-        h('div', { className: 'media-newapi-actions' }, challenge ? h('button', { type: 'button', className: 'media-form-button', disabled: busy, onClick: () => { setChallenge(null); setCode('') } }, '返回') : account && h('button', { type: 'button', className: 'media-form-button', disabled: busy, onClick: () => { setEditing(false); setPassword(''); setMessage('') } }, '取消'), h('button', { type: 'submit', className: 'media-form-button media-form-primary', disabled: busy }, busy ? '连接中…' : challenge ? '验证并连接' : '登录并连接')),
+        h('div', { className: 'media-newapi-actions' }, challenge && h('button', { type: 'button', className: 'media-form-button', disabled: busy, onClick: () => { setChallenge(null); setCode('') } }, '返回'), h('button', { type: 'submit', className: 'media-form-button media-form-primary', disabled: busy }, busy ? '连接中…' : challenge ? '验证并连接' : '登录并连接')),
         message && h('p', { role: 'status' }, message))
+    }
+
+    function NewApiSessionMonitor({ form, credentials, modelForm }) {
+      const snapshot = React.useSyncExternalStore(form.subscribe.bind(form), form.getSnapshot.bind(form), form.getSnapshot.bind(form))
+      const modelSnapshot = React.useSyncExternalStore(modelForm.subscribe.bind(modelForm), modelForm.getSnapshot.bind(modelForm), modelForm.getSnapshot.bind(modelForm))
+      if (snapshot.status !== 'ready') return null
+      return h('div', { hidden: true }, h(NewApiLogin, { form, credentials, modelForm, modelReady: modelSnapshot.status === 'ready' && modelSnapshot.writable, account: snapshot.value?.newApiAccount, onBusyChange: () => {}, background: true }))
     }
 
     let updateRemote
@@ -505,7 +589,7 @@ window.__ModuleLoader__.load({
                 phase === 'start' ? h(React.Fragment, null, h('span', { className: 'deepimage-percent' }, `${progress}%`), h('span', { className: 'deepimage-estimate' }, '估算进度')) : h('span', null, '准备中…')))
           : h('div', { className: 'deepimage-result' },
               h('strong', null, block.isError ? '图片生成失败' : '图片生成完成'),
-              ...content.map((part, index) => part?.type === 'image' && part.attachment
+              ...content.filter(part => block.isError || part?.type !== 'image').map((part, index) => part?.type === 'image' && part.attachment
                 ? h(GeneratedImage, { key: index, attachment: part.attachment, loadImage })
                 : part?.type === 'text' && typeof part.text === 'string'
                   ? h('p', { key: index }, part.text)
@@ -524,7 +608,6 @@ window.__ModuleLoader__.load({
       const [openMenu, setOpenMenu] = React.useState(null)
       const [activeKind, setActiveKind] = React.useState('image')
       const [accountBusy, setAccountBusy] = React.useState(false)
-      const [accountEditing, setAccountEditing] = React.useState(false)
       const value = snapshot.value || {}
       const shownKind = value.newApiAccount ? activeKind : 'settings'
       React.useEffect(() => { if (!value.newApiAccount) { setEditor(null); setSecret(''); setError('') } }, [value.newApiAccount?.id])
@@ -555,7 +638,7 @@ window.__ModuleLoader__.load({
           const timeoutText = editor.timeoutText.trim()
           if (timeoutText) {
             const seconds = Number(timeoutText)
-            if (!/^\d+(?:\.\d{1,3})?$/.test(timeoutText) || !Number.isFinite(seconds) || seconds < 1 || seconds > 4294967.295) throw new Error('超时时间需为 1 至 4294967.295 秒，最多保留三位小数。')
+            if (!/^\d+(?:\.\d{1,3})?$/.test(timeoutText) || !Number.isFinite(seconds) || seconds < 1 || seconds > 2147483.647) throw new Error('超时时间需为 1 至 2147483.647 秒，最多保留三位小数。')
             next.timeoutMs = Math.round(seconds * 1000)
           } else delete next.timeoutMs
           if (kind === 'video') {
@@ -658,14 +741,14 @@ window.__ModuleLoader__.load({
           .media-form-actions{display:flex;justify-content:flex-end;gap:8px}.media-form-primary{background:var(--dsw-alias-button-primary-fill,#4d6bfe);color:var(--dsw-alias-label-primary-inverted,#fff)!important;border-color:transparent}.media-form-primary:hover{opacity:.9}
           .media-error{margin-top:16px!important;color:var(--dsw-alias-label-danger,#c44);white-space:pre-wrap}
           .media-newapi{display:grid;gap:12px;margin-top:20px;padding:16px;border:1px solid var(--dsw-alias-settings-card-stroke,#e2e5eb);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-settings-card-fill,#f7f8fa)}.media-newapi h3{font-weight:600}.media-newapi p{color:var(--dsw-alias-label-secondary,#6b7280);font-size:13px}.media-newapi label{display:grid;gap:4px;color:var(--dsw-alias-label-secondary,#6b7280)}.media-newapi input{box-sizing:border-box;width:100%;padding:8px 10px;border:1px solid var(--dsw-alias-border-l3,#d9dce3);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1,transparent)}.media-newapi-actions{display:flex;gap:8px}
-          .media-newapi-account{gap:10px;position:relative}.media-account-main{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding-right:160px}.media-account-avatar{position:relative;display:flex;align-items:center;justify-content:center;flex:none;width:48px;height:48px;border-radius:50%;background:var(--dsw-alias-interactive-bg-hover-accent,#e8edff);color:var(--dsw-alias-brand-text,#4263d9);font-size:20px;font-weight:600}.media-account-indicator{position:absolute;right:-1px;bottom:-1px;width:12px;height:12px;box-sizing:border-box;border:2px solid var(--dsw-alias-settings-card-fill,#fff);border-radius:50%;background:#a0a6b2}.media-account-indicator.is-connected{background:#22b66a}.media-account-indicator.is-expired{background:#e38a38}.media-account-name{display:grid;gap:1px;flex:1 1 125px;min-width:0;overflow-wrap:anywhere}.media-account-name strong{font-size:16px}.media-account-name span,.media-account-label,.media-account-updated{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280)}.media-account-balance{display:grid;gap:1px;min-width:115px}.media-account-balance strong{font-size:19px;line-height:26px;font-variant-numeric:tabular-nums}.media-account-updated{font-size:11px}.media-account-actions{position:absolute;right:16px;top:16px;display:flex;align-items:center;gap:4px}.media-account-icon{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:1px solid var(--dsw-alias-border-l3,#d9dce3);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1,transparent)}.media-account-icon:hover{background:var(--dsw-alias-interactive-bg-hover,#e9ebf0)}.media-account-icon:active{transform:translateY(1px)}
+          .media-newapi-account{gap:10px;position:relative}.media-account-main{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding-right:122px}.media-account-avatar{position:relative;display:flex;align-items:center;justify-content:center;flex:none;width:48px;height:48px;border-radius:50%;background:var(--dsw-alias-interactive-bg-hover-accent,#e8edff);color:var(--dsw-alias-brand-text,#4263d9);font-size:20px;font-weight:600}.media-account-indicator{position:absolute;right:-1px;bottom:-1px;width:12px;height:12px;box-sizing:border-box;border:2px solid var(--dsw-alias-settings-card-fill,#fff);border-radius:50%;background:#a0a6b2}.media-account-indicator.is-connected{background:#22b66a}.media-account-indicator.is-expired{background:#e38a38}.media-account-name{display:grid;gap:1px;flex:1 1 125px;min-width:0;overflow-wrap:anywhere}.media-account-name strong{font-size:16px}.media-account-name span,.media-account-label,.media-account-updated{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280)}.media-account-balance{display:grid;gap:1px;min-width:115px}.media-account-balance strong{font-size:19px;line-height:26px;font-variant-numeric:tabular-nums}.media-account-updated{font-size:11px}.media-account-actions{position:absolute;right:16px;top:16px;display:flex;align-items:center;gap:4px}.media-account-icon{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:1px solid var(--dsw-alias-border-l3,#d9dce3);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1,transparent)}.media-account-icon:hover{background:var(--dsw-alias-interactive-bg-hover,#e9ebf0)}.media-account-icon:active{transform:translateY(1px)}
 
           @media(max-width:600px){.media-settings{padding:16px}.media-card-meta{grid-template-columns:1fr;gap:8px}.media-heading{align-items:flex-start}.media-section-description{max-width:28ch}.media-account-main{padding-right:0}.media-account-actions{position:static;flex-basis:100%;justify-content:flex-end}}
         `),
         h('h2', null, 'deepImage'),
         h('p', { className: 'media-intro' }, '管理图片和视频服务商，选择用于自动绘图的默认服务商。'),
-        snapshot.status === 'ready' && h('div', { hidden: !!editor }, h(NewApiLogin, { form, credentials, modelForm, modelReady: modelSnapshot.status === 'ready' && modelSnapshot.writable, account: value.newApiAccount, onBusyChange: setAccountBusy, editing: accountEditing, setEditing: setAccountEditing })),
-        !editor && !accountEditing && value.newApiAccount && snapshot.status === 'ready' && h('div', { className: 'media-tabs', role: 'tablist', 'aria-label': 'deepImage 页面' },
+        snapshot.status === 'ready' && h('div', { hidden: !!editor }, h(NewApiLogin, { form, credentials, modelForm, modelReady: modelSnapshot.status === 'ready' && modelSnapshot.writable, account: value.newApiAccount, onBusyChange: setAccountBusy })),
+        !editor && value.newApiAccount && snapshot.status === 'ready' && h('div', { className: 'media-tabs', role: 'tablist', 'aria-label': 'deepImage 页面' },
           ...(value.newApiAccount ? [['image', '绘图'], ['video', '视频'], ['settings', '设置']] : [['settings', '设置']]).map(([kind, label]) => h('button', {
             key: kind, id: `media-tab-${kind}`, type: 'button', className: 'media-tab', role: 'tab', 'aria-selected': shownKind === kind,
             'aria-controls': kind === 'settings' ? 'media-settings-panel' : 'media-provider-panel', tabIndex: shownKind === kind ? 0 : -1,
@@ -679,15 +762,15 @@ window.__ModuleLoader__.load({
               e.currentTarget.parentElement.querySelector(`[data-media-kind="${next}"]`)?.focus()
             }, 'data-media-kind': kind,
           }, label))),
-        snapshot.status !== 'ready' ? h('p', null, snapshot.status === 'loading' ? '正在加载配置…' : '配置暂不可用。') : value.newApiAccount && !editor && !accountEditing && shownKind !== 'settings' && h('div', { id: 'media-provider-panel', role: 'tabpanel', 'aria-labelledby': `media-tab-${shownKind}` }, section(shownKind, shownKind === 'image' ? '绘图服务商' : '视频服务商')),
-        snapshot.status === 'ready' && h('div', { id: 'media-settings-panel', role: 'tabpanel', 'aria-labelledby': 'media-tab-settings', hidden: !!editor || accountEditing || !value.newApiAccount || shownKind !== 'settings' }, h(UpdatePanel)),
+        snapshot.status !== 'ready' ? h('p', null, snapshot.status === 'loading' ? '正在加载配置…' : '配置暂不可用。') : value.newApiAccount && !editor && shownKind !== 'settings' && h('div', { id: 'media-provider-panel', role: 'tabpanel', 'aria-labelledby': `media-tab-${shownKind}` }, section(shownKind, shownKind === 'image' ? '绘图服务商' : '视频服务商')),
+        snapshot.status === 'ready' && h('div', { id: 'media-settings-panel', role: 'tabpanel', 'aria-labelledby': 'media-tab-settings', hidden: !!editor || !value.newApiAccount || shownKind !== 'settings' }, h(UpdatePanel)),
         value.newApiAccount && error && h('p', { className: 'media-error', role: 'alert' }, error),
         value.newApiAccount && editor && h('form', { className: 'media-form', onSubmit: save },
           h('h3', null, `${editor.index === null ? '添加' : '编辑'}${editor.kind === 'image' ? '绘图' : '视频'}服务商`),
           ...fields.slice(0, 4).map(([key, label, required]) => h('label', { key }, label, h('input', { value: editor.data[key] ?? '', required, onChange: e => change(key, e.target.value) }))),
           editor.kind === 'video' && h('label', null, '查询任务地址（包含 {taskId}）', h('input', { required: true, value: editor.data.statusEndpointTemplate ?? '', onChange: e => change('statusEndpointTemplate', e.target.value) })),
           h('label', null, 'API Key（留空使用已有凭据）', h('input', { type: 'password', autoComplete: 'new-password', value: secret, onChange: e => setSecret(e.target.value) })),
-          h('label', null, '请求超时（秒）', h('input', { type: 'number', min: 1, max: 4294967.295, step: 0.001, inputMode: 'decimal', value: editor.timeoutText, placeholder: `留空使用默认值（${(Number(value.timeoutMs) || 60000) / 1000} 秒）`, onChange: e => setEditor(old => ({ ...old, timeoutText: e.target.value })) })),
+          h('label', null, '请求超时（秒）', h('input', { type: 'number', min: 1, max: 2147483.647, step: 0.001, inputMode: 'decimal', value: editor.timeoutText, placeholder: `留空使用默认值（${(!value.timeoutMs || Number(value.timeoutMs) === 60000 ? 300000 : Math.min(Number(value.timeoutMs), 2147483647)) / 1000} 秒）`, onChange: e => setEditor(old => ({ ...old, timeoutText: e.target.value })) })),
           h('details', null, h('summary', null, '高级设置'),
             h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px' } }, h('input', { type: 'checkbox', style: { width: 'auto' }, checked: !!editor.data.allowInsecureHttp, onChange: e => change('allowInsecureHttp', e.target.checked) }), '允许外部 HTTP（仅限调试；密钥会明文传输）'),
             ...[...fields.slice(4), ...(editor.kind === 'image' ? imageFields : videoFields.slice(1))].map(([key, label, required]) => h('label', { key }, label, h('input', { value: editor.data[key] ?? '', required, onChange: e => change(key, e.target.value) }))),
@@ -736,6 +819,10 @@ window.__ModuleLoader__.load({
           name: 'settings.section', id: 'media-generation', order: 15,
           label: () => 'deepImage', inject: () => ({ form, credentials, modelForm }),
         }, MediaSettings))
+        ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+          name: 'shell.overlay', id: 'deepimage-newapi-session',
+          inject: () => ({ form, credentials, modelForm }),
+        }, NewApiSessionMonitor))
         ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
           name: 'tool.call.toolview', key: 'generate_image',
         }, ImageToolView))

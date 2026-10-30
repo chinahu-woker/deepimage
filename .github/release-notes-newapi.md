@@ -1,13 +1,12 @@
-公司版新增账户卡片中的「同步模型」按钮，可更新对话、图片和视频模型，保留仍可用模型的自定义配置。
+本版改进了图片生成体验和 New API 账户管理：
 
-修复图片生成完成后预览被工具过程折叠的问题；生成中的估算进度和完成后的图片均可在对话中查看。
+- 图片请求优先引导对话模型调用生图工具，保留明确要求 SVG 或代码绘制的场景。
+- 图片生成完成后只在正文显示一次预览，生成进度与失败详情仍可查看。
+- 图片、视频及自动同步的对话模型默认请求超时为 5 分钟，改进超时、取消和视频任务状态判断。
+- New API 账号失效时自动清除本地登录状态并返回登录页面，保留可恢复的持久会话。
 
-本 Release 包含公司版插件及 macOS、Windows 桌面安装器。安装器可选择开源版或 New API 公司版，并在每次安装时联网下载、校验该版本的最新插件。
+本 Release 提供公司版插件 `deepimage-newapi-0.1.9.tgz` 和 macOS、Windows 安装器。安装器支持选择开源版或公司版，每次安装时下载并校验所选版本的最新插件。
 
-1. 先打开一次 DeepSeek Harness 桌面应用，再完全退出。
-2. 下载对应系统的 ZIP 并解压；macOS 打开「安装 deepImage.app」，Windows 打开 `Install deepImage.cmd`。
-3. 选择版本，完成安装后重新打开 DeepSeek Harness，在「设置 → deepImage」中配置。
+先安装并打开一次 DeepSeek Harness，然后完全退出。下载对应系统的 ZIP 并解压：macOS 双击「安装 deepImage.app」，Windows 双击 `Install deepImage.cmd`。完成安装后重新打开 Harness，在「设置 → deepImage」中登录。已安装用户也可通过插件设置检查更新。
 
-macOS 安装器尚未经过 Apple 公证；Windows 安装器尚未签名，也尚未在 Windows 真机验证。系统可能阻止运行，安装过程可能需要联网。
-
-手动安装用户可下载 `deepimage-newapi-0.1.8.tgz`。
+macOS 安装器尚未经过 Apple 公证，Windows 安装器尚未签名，也尚未在 Windows 真机验证；系统可能提示或阻止运行。

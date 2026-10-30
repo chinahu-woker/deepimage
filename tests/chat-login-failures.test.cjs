@@ -55,5 +55,10 @@ const credentials = { async set() { return { ok: true } } }
   assert.equal(originalImage.requestBody.custom, true)
   assert.equal(account.chatRoutesManaged, true)
   assert.equal(account.chatSyncVersion, 1)
+  account = null
+  let savedCredential = false
+  const readOnlyModels = { getSnapshot: () => ({ status: 'loading', writable: false, value: { providers } }) }
+  await assert.rejects(() => scope.configureNewApi({ access_token: 'a', user: { id: 42 } }, form, { async set() { savedCredential = true; return { ok: true } } }, readOnlyModels), /对话模型配置暂不可写/)
+  assert.equal(savedCredential, false)
   console.log('Chat login failure checks passed: account switch rollback and media configuration preservation.')
 })().catch(error => { console.error(error); process.exitCode = 1 })

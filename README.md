@@ -28,14 +28,16 @@
 - **视频生成**：提交异步视频任务，并查询任务状态和结果。
 - **New API 连接**：登录 [AIKNA New API](https://token.aikna.cn/)，自动配置账号可用的兼容对话、图片和视频模型。
 - **灵活配置**：管理多个服务商，为每个 API 设置请求超时，并通过高级配置适配不同的请求与响应格式。
+
+使用支持工具调用的对话模型，并在 deepImage 中配置默认图片服务商后，可以直接描述要生成的图片。明确要求 SVG、矢量图或用代码绘制时，仍按指定方式处理。
 - **生成反馈**：图片生成期间显示加载动画和估算进度，方便了解等待状态。
 
 ## 桌面版安装器
 
 安装器包含开源版和公司版，解压后双击打开并选择所需版本：
 
-- [下载 macOS 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.8/deepImage-installer-macOS.zip)
-- [下载 Windows 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.8/deepImage-installer-Windows.zip)
+- [下载 macOS 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.9/deepImage-installer-macOS.zip)
+- [下载 Windows 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.9/deepImage-installer-Windows.zip)
 
 安装器每次运行都会联网下载所选版本的最新插件。安装前请先启动一次 DeepSeek Harness 桌面版，再完全退出。安装可能需要联网。macOS 安装器尚未经过 Apple 公证，Windows 安装器尚未签名，也尚未在 Windows 真机验证，系统可能阻止运行。使用步骤与构建要求见 [桌面安装器说明](installer/README.md)。
 
@@ -80,7 +82,9 @@
 
 登录后可在“绘图”或“视频”选项卡中添加、编辑服务商。填写 API 地址、模型 ID 和凭据引用；API Key 可保存到 Harness 凭据服务，也可复用已有凭据引用。自动配置会保留已有服务商。
 
-在服务商编辑页面可设置该 API 的请求超时，单位为秒。留空时沿用原有全局 `timeoutMs` 配置；全局未设置时默认为 60 秒。图片生成通常需要较长时间，可按需调高。
+在服务商编辑页面可设置该 API 的请求超时，单位为秒。留空时沿用原有全局 `timeoutMs` 配置；全局未设置时默认为 300 秒（5 分钟）。图片生成请求超时不代表服务商已停止生成，请确认结果后再决定是否重试。视频是异步任务，单次查询超时也不代表任务失败，可使用原任务 ID 再次查询。
+
+旧版本的全局默认值 60 秒会按 5 分钟处理；如需 60 秒，可在服务商编辑页面单独设置。
 
 不同服务商的协议和模型参数可能不同，可在高级设置中调整请求体和响应字段路径；自动接入仅覆盖上述兼容接口。New API 视频任务完成后，插件会下载视频并作为附件返回，大小上限为 200 MB。
 

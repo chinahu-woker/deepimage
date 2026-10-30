@@ -11,16 +11,16 @@ const catalog = [
   { model_name: 'chat-kept', supported_endpoint_types: ['openai'] },
   { model_name: 'chat-new', supported_endpoint_types: ['openai'] },
 ]
-let failCatalog = false, statusRequests = 0
+let failCatalog = false, expiredSelf = false, statusRequests = 0
 const scope = {
   newApiBase: 'https://token.aikna.cn', Set, Number, String, Error, Array, Object, Promise, newApiSession: null,
-  defaults: () => ({}), newApiAccount: user => ({ id: user.id, username: user.username }),
+  defaults: () => ({}), newApiAccount: user => ({ id: user.id, username: user.username }), isExpiredNewApiSession: error => error?.message === '登录会话已失效，请重新登录。',
   async newApiRequest(route) {
     if (route === '/api/pricing') { if (failCatalog) throw Error('catalog unavailable'); return { data: catalog } }
     if (route === '/api/token/search?keyword=deepImage&page_size=100') return { data: { items: [{ id: 1, name: 'deepImage', status: 1 }], total: 1 } }
     if (route === '/api/token/1/key') return { data: { key: 'sk-test' } }
     if (route === '/v1/models') return { data: catalog.map(item => ({ id: item.model_name })) }
-    if (route === '/api/user/self') return { data: { id: 42, username: 'test' } }
+    if (route === '/api/user/self') { if (expiredSelf) throw Error('登录会话已失效，请重新登录。'); return { data: { id: 42, username: 'test' } } }
     if (route === '/api/status') { statusRequests++; return { data: {} } }
     throw Error('Unexpected request')
   },
@@ -49,6 +49,8 @@ const state = {
     { id: 'manual', model: 'manual', apiKeyEnv: 'CUSTOM' },
     { id: 'newapi:42:image:image-kept', model: 'image-kept', endpoint: 'https://custom.example', timeoutMs: 12345 },
     { id: 'newapi:42:image:removed', model: 'removed' },
+    { id: 'renamed-revoked', model: 'removed', apiKeyEnv: 'DEEPIMAGE_NEWAPI_42' },
+    { id: 'renamed-kept', model: 'image-kept', apiKeyEnv: 'DEEPIMAGE_NEWAPI_42' },
   ],
   videoProviders: [], defaultImageProvider: 'newapi:42:image:image-kept',
 }
@@ -62,9 +64,9 @@ const bundle = { access_token: 'session', access_expires_at: 9999999999, user: {
 ;(async () => {
   const result = await scope.configureNewApi(bundle, form, credentials, modelForm, 42)
   assert.deepEqual([result.images, result.videos, result.chats, result.chatError], [2, 1, 2, ''])
-  assert.deepEqual(Array.from(state.imageProviders, x => x.id), ['manual', 'newapi:42:image:image-kept', 'newapi:42:image:image-new'])
-  assert.equal(state.imageProviders[1].endpoint, 'https://custom.example')
-  assert.equal(state.imageProviders[1].timeoutMs, 12345)
+  assert.deepEqual(Array.from(state.imageProviders, x => x.id), ['manual', 'renamed-kept', 'newapi:42:image:image-kept', 'newapi:42:image:image-new'])
+  assert.equal(state.imageProviders[2].endpoint, 'https://custom.example')
+  assert.equal(state.imageProviders[2].timeoutMs, 12345)
   assert.equal(state.defaultImageProvider, 'newapi:42:image:image-kept')
   assert.equal(state.videoProviders[0].model, 'video-new')
   assert.equal(models.providers['deepimage-newapi-42-chat'].defaultContextWindow, 9999)
@@ -76,6 +78,10 @@ const bundle = { access_token: 'session', access_expires_at: 9999999999, user: {
   await assert.rejects(() => scope.configureNewApi(bundle, form, credentials, modelForm, 42), /catalog unavailable/)
   assert.equal(JSON.stringify({ state, models }), before)
   failCatalog = false
+  expiredSelf = true
+  await assert.rejects(() => scope.configureNewApi(bundle, form, credentials, modelForm, 42), /登录会话已失效/)
+  assert.equal(JSON.stringify({ state, models }), before)
+  expiredSelf = false
   await assert.rejects(() => scope.configureNewApi(bundle, form, credentials, modelForm, 43), /当前账户已更换/)
   assert.equal(JSON.stringify({ state, models }), before)
   catalog.length = 0
