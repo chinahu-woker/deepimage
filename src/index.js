@@ -2,6 +2,7 @@ import Schema from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { Service } from '@deepseek-ai/cordis'
+import { DeepImageUpdater, updateDescriptor } from './updater.js'
 
 export const name = 'deepImage'
 export const inject = ['tools', 'credentials']
@@ -143,6 +144,10 @@ const toolOutputSchema = {
 }
 
 export function apply(ctx, config) {
+  ctx.inject(['typert', 'pluginManager'], child => {
+    child.plugin(DeepImageUpdater)
+    child.typert.register({ package: 'dsh-media-generation-updater', face: 'host', model: {}, schemas: [], invocations: [updateDescriptor] })
+  })
   ctx.inject(['typert'], child => {
     child.plugin(NewApiService)
     child.typert.register({ package: 'dsh-media-generation-newapi', face: 'host', model: {}, schemas: [], invocations: [newApiDescriptor] })

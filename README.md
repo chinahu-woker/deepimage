@@ -34,14 +34,14 @@
 
 安装器包含开源版和公司版，解压后双击打开并选择所需版本：
 
-- [下载 macOS 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.1/deepImage-installer-macOS.zip)
-- [下载 Windows 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.1/deepImage-installer-Windows.zip)
+- [下载 macOS 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.2/deepImage-installer-macOS.zip)
+- [下载 Windows 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.2/deepImage-installer-Windows.zip)
 
 安装前请先启动一次 DeepSeek Harness 桌面版，再完全退出。安装可能需要联网。macOS 安装器尚未经过 Apple 公证，Windows 安装器尚未签名，也尚未在 Windows 真机验证，系统可能阻止运行。使用步骤与构建要求见 [桌面安装器说明](installer/README.md)。
 
 ## 快速开始
 
-需要安装 DeepSeek Harness、Node.js 和 pnpm。本分支已在 Harness `0.2.1-rc.2` 开发环境中验证；Harness 仍处于预览阶段，其他版本的插件 API 可能有所差异。
+需要安装 DeepSeek Harness、Node.js 和 pnpm。本分支已在 Harness `0.2.1-rc.5` 开发环境中验证；Harness 仍处于预览阶段，其他版本的插件 API 可能有所差异。
 
 1. 克隆并安装当前分支：
 
@@ -61,6 +61,12 @@
    > 画一张雨后霓虹街道的电影感插画。
 
 模型会根据对话内容决定是否调用绘图工具。视频生成则通过创建任务和查询状态获取结果。
+
+## 检查插件更新
+
+安装包含更新功能的版本后，打开 **设置 → deepImage → 插件更新**，点击“检查更新”；发现新版本时点击“更新到”即可安装。开源版和 New API 公司版分别检查各自的 Release，更新后按提示重启应用。
+
+目前仓库为私有仓库。首次检查前，在“配置 GitHub Token”中保存具有该仓库 Contents 只读权限的 GitHub Token；凭据由 Harness 保存。已安装的旧版本没有更新入口，需要先手动安装一次新版本。本地源码链接不会被自动覆盖。
 
 ## 配置与使用
 

@@ -193,6 +193,102 @@ window.__ModuleLoader__.load({
         message && h('p', { role: 'status' }, message))
     }
 
+    let updateRemote
+    let updateManager
+    const updateCodec = { mode: 'strict', typeSymbol: 'deepimage#update-request', create: () => ({ parse: value => value }) }
+    const updateDescriptor = { id: 'deepimage/update-request', service: 'deepImageUpdate', namespace: 'deepImageUpdate', method: 'request', invocation: { kind: 'direct' }, parameters: [{ name: 'request', wire: 'request', source: 'json', codec: updateCodec }], result: { mode: 'strict', typeSymbol: 'deepimage#update-response', create: () => ({ parse: value => value }) } }
+    async function updateRequest(input) {
+      if (!updateRemote?.deepImageUpdate) throw new Error('更新服务尚未就绪，请稍后重试。')
+      const response = await updateRemote.deepImageUpdate.request(input)
+      if (!response.ok) throw new Error(response.error?.message || '更新请求失败。')
+      return response.value
+    }
+
+    const updatePendingKey = 'deepimage-update-pending'
+    function readPendingUpdate() {
+      try {
+        const value = JSON.parse(sessionStorage.getItem(updatePendingKey) || 'null')
+        return typeof value?.version === 'string' && /^\d+\.\d+\.\d+$/.test(value.version) ? value : null
+      } catch { return null }
+    }
+    function writePendingUpdate(value) {
+      try { if (value) sessionStorage.setItem(updatePendingKey, JSON.stringify(value)); else sessionStorage.removeItem(updatePendingKey) } catch {}
+    }
+
+    function UpdatePanel({ credentials }) {
+      const [status, setStatus] = React.useState(null)
+      const [token, setToken] = React.useState('')
+      const [message, setMessage] = React.useState('')
+      const [busy, setBusy] = React.useState(false)
+      const busyRef = React.useRef(false)
+      React.useEffect(() => {
+        const pending = readPendingUpdate()
+        if (!pending) return
+        let active = true, timer, attempts = 0
+        setMessage('正在确认更新结果…')
+        const recover = async () => {
+          try {
+            const current = await updateRequest({ action: 'status' })
+            if (!active) return
+            if (current.version === pending.version) {
+              writePendingUpdate(null)
+              setMessage(`已更新到 ${pending.version}。`)
+              return
+            }
+          } catch {}
+          if (!active) return
+          if (++attempts < 12) timer = setTimeout(recover, 250)
+          else { writePendingUpdate(null); setMessage('未能确认更新结果，请重新检查版本。') }
+        }
+        void recover()
+        return () => { active = false; clearTimeout(timer) }
+      }, [])
+      const check = async () => {
+        if (busyRef.current) return
+        busyRef.current = true; setBusy(true); setMessage('')
+        try {
+          const value = await updateRequest({ action: 'check' })
+          setStatus(value)
+          setMessage(value.available ? `发现新版本 ${value.latest}。` : `当前已是最新版本 ${value.version}。`)
+        } catch (error) { setStatus(null); setMessage(error.message || '检查更新失败，请重试。') }
+        finally { busyRef.current = false; setBusy(false) }
+      }
+      const saveToken = async event => {
+        event.preventDefault()
+        if (busyRef.current || !token.trim()) return
+        busyRef.current = true; setBusy(true); setMessage('')
+        try {
+          const result = await credentials.set('DEEPIMAGE_GITHUB_TOKEN', token.trim())
+          if (!result.ok) throw new Error(result.error?.message || '凭据保存失败。')
+          setToken(''); setStatus(null); setMessage('GitHub Token 已保存，请检查更新。')
+        } catch (error) { setMessage(error.message || '凭据保存失败，请重试。') }
+        finally { busyRef.current = false; setBusy(false) }
+      }
+      const install = async () => {
+        if (busyRef.current || !status?.available) return
+        busyRef.current = true; setBusy(true); setMessage('正在下载并校验更新…')
+        try {
+          const prepared = await updateRequest({ action: 'prepare', version: status.latest })
+          if (!updateManager) throw new Error('当前 Harness 未提供插件管理服务。')
+          setMessage('正在安装更新，请稍候…')
+          writePendingUpdate({ version: prepared.version })
+          const result = await updateManager.installBundle(prepared.path, { enabled: prepared.enabled })
+          if (!result.ok) throw new Error(result.error?.message || '插件更新失败。')
+          const value = result.value
+          if (value.application === 'failed' || value.application === 'cancelled' || value.error) throw new Error(value.error?.message || '插件更新失败，请在插件管理器中查看详情。')
+          setStatus(null)
+          if (value.application !== 'applied') writePendingUpdate(null)
+          setMessage(value.application === 'applied' ? `已更新到 ${prepared.version}。` : value.application === 'overridden' ? '更新已保存，但被其他配置覆盖，请在插件管理器中检查。' : `已安装 ${prepared.version}，请重启 DeepSeek Harness 以完成更新。`)
+        } catch (error) { writePendingUpdate(null); setMessage(error.message || '更新失败，请重试。') }
+        finally { busyRef.current = false; setBusy(false) }
+      }
+      return h('section', { className: 'media-update', 'aria-label': '插件更新' },
+        h('div', { className: 'media-update-head' }, h('div', null, h('strong', null, '插件更新'), h('p', null, status ? `当前 ${status.version} · ${status.edition === 'newapi' ? 'New API 公司版' : '开源版'}` : '检查当前版本的更新。')),
+          status?.available ? h('button', { type: 'button', className: 'media-form-button media-form-primary', disabled: busy, onClick: install }, busy ? '处理中…' : `更新到 ${status.latest}`) : h('button', { type: 'button', className: 'media-form-button', disabled: busy, onClick: check }, busy ? '检查中…' : '检查更新')),
+        h('details', null, h('summary', null, '配置 GitHub Token'), h('form', { onSubmit: saveToken }, h('p', null, '私有仓库需要有该仓库 Contents 只读权限的 GitHub Token。凭据保存在 Harness 中。'), h('label', null, 'GitHub Token', h('input', { type: 'password', autoComplete: 'off', value: token, onChange: e => setToken(e.target.value) })), h('button', { className: 'media-form-button', type: 'submit', disabled: busy || !token.trim() }, '保存凭据'))),
+        message && h('p', { className: 'media-update-message', role: 'status' }, message))
+    }
+
     function GeneratedImage({ attachment, loadImage }) {
       const [url, setUrl] = React.useState(() => loadImage.peek?.(attachment) || '')
       const [failed, setFailed] = React.useState(false)
@@ -353,6 +449,7 @@ window.__ModuleLoader__.load({
           .media-settings button{cursor:pointer}
           .media-settings button:disabled{opacity:.45;cursor:not-allowed}
           .media-settings button:focus-visible,.media-settings summary:focus-visible,.media-settings input:focus-visible,.media-settings textarea:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:2px}
+          .media-update{margin-top:20px;padding:14px 16px;border:1px solid var(--dsw-alias-settings-card-stroke,#e2e5eb);border-radius:var(--dsw-radius-md,12px)}.media-update-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.media-update p{color:var(--dsw-alias-label-secondary,#6b7280);font-size:13px;line-height:20px}.media-update details{margin-top:12px}.media-update summary{cursor:pointer;font-size:13px;color:var(--dsw-alias-label-secondary,#6b7280)}.media-update form{display:grid;gap:8px;margin-top:10px}.media-update label{display:grid;gap:6px}.media-update input{box-sizing:border-box;width:100%;padding:8px 10px;border:1px solid var(--dsw-alias-border-l3,#d9dce3);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1,transparent);color:inherit}.media-update form button{justify-self:start}.media-update-message{margin-top:10px!important;overflow-wrap:anywhere}
           .media-intro{margin-top:8px!important;color:var(--dsw-alias-label-secondary,#6b7280);max-width:48ch}
           .media-tabs{display:flex;gap:24px;margin-top:24px;border-bottom:1px solid var(--dsw-alias-border-l4,#e2e5eb)}
           .media-tab{position:relative;padding:8px 2px 12px;border:0;background:transparent;color:var(--dsw-alias-label-secondary,#6b7280)!important}
@@ -388,6 +485,7 @@ window.__ModuleLoader__.load({
         `),
         h('h2', null, 'deepImage'),
         h('p', { className: 'media-intro' }, '管理图片和视频服务商，选择用于自动绘图的默认服务商。'),
+        !editor && snapshot.status === 'ready' && h(UpdatePanel, { credentials }),
         !editor && snapshot.status === 'ready' && h(NewApiLogin, { form, credentials, account: value.newApiAccount }),
         !editor && snapshot.status === 'ready' && value.newApiAccount && h('div', { className: 'media-tabs', role: 'tablist', 'aria-label': '服务商类型' },
           ...[['image', '绘图'], ['video', '视频']].map(([kind, label]) => h('button', {
@@ -422,6 +520,10 @@ window.__ModuleLoader__.load({
       apply(ctx) {
         const form = ctx.configForms.get('tool-media-generation')
         const credentials = ctx.remote.credentials
+        ctx.inject(['remote.pluginManager'], child => { updateManager = child.remote.pluginManager; return () => { updateManager = undefined } })
+        ctx.remote.$mount({ package: 'dsh-media-generation-updater', descriptors: [updateDescriptor] }).then(() => {
+          ctx.inject(['remote.deepImageUpdate'], child => { updateRemote = child.remote; return () => { updateRemote = undefined } })
+        }, () => { updateRemote = undefined })
         ctx.remote.$mount({ package: 'dsh-media-generation-newapi', descriptors: [newApiDescriptor] }).then(() => {
           ctx.inject(['remote.deepImageNewApi'], child => {
             newApiRemote = child.remote
