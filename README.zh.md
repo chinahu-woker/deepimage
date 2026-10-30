@@ -27,6 +27,8 @@ export ARK_API_KEY='你的视频服务商密钥'
 
 视频服务商需提供创建任务端点、包含 `{taskId}` 的查询端点模板，以及响应路径：`taskIdPath`、`statusPath`、`videoUrlPath`。`generate_video` 只负责提交任务；任务生成时间因服务商而异，之后调用 `check_video_task` 查询进度和结果。
 
+每个图片或视频服务商都可设置独立的请求超时时间。设置页以秒为单位；配置文件中使用该服务商的 `timeoutMs`（毫秒）。留空时沿用已有全局 `timeoutMs`，全局未设置时默认 60 秒。
+
 ## 安装与运行
 
 在本目录执行：

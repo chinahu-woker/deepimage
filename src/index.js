@@ -1,6 +1,7 @@
 import Schema from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import { Service } from '@deepseek-ai/cordis'
 
 export const name = 'deepImage'
 export const inject = ['tools', 'credentials']
@@ -10,6 +11,42 @@ const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024
 const DEFAULT_MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
 const IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+const newApiCodec = { mode: 'strict', typeSymbol: 'deepimage#newapi-request', create: () => ({ parse(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['path', 'token', 'body'].includes(key)) || typeof value.path !== 'string' || typeof value.token !== 'string' || (value.body !== null && (typeof value.body !== 'object' || Array.isArray(value.body)))) throw new Error('Invalid New API request.')
+  return value
+} }) }
+const newApiDescriptor = { id: 'deepimage/newapi-request', service: 'deepImageNewApi', namespace: 'deepImageNewApi', method: 'request', invocation: { kind: 'direct' }, parameters: [{ name: 'request', wire: 'request', source: 'json', codec: newApiCodec }], result: { mode: 'strict', typeSymbol: 'deepimage#newapi-response', create: () => ({ parse: value => value }) } }
+
+class NewApiService extends Service {
+  constructor(ctx) {
+    super(ctx, 'deepImageNewApi')
+    this.typertRemote = Object.freeze({ service: this, serviceKey: this.name, namespace: this.name })
+  }
+  async request(input) {
+    if (this.ctx.invocation?.peer?.principal?.kind !== 'owner') throw new Error('New API connection is available only to the host owner.')
+    const allowed = new Set(['/api/user/login', '/api/user/login/verify', '/api/user/self', '/api/status', '/api/pricing', '/api/token/search?keyword=deepImage&page_size=100', '/api/token/', '/v1/models'])
+    if (!allowed.has(input.path) && !/^\/api\/token\/[1-9]\d*\/key$/.test(input.path)) throw new Error('Unsupported New API request.')
+    const post = input.path === '/api/user/login' || input.path === '/api/user/login/verify' || input.path === '/api/token/' || /^\/api\/token\/[1-9]\d*\/key$/.test(input.path)
+    if ((post && !input.body) || (!post && input.body !== null)) throw new Error('Invalid New API request method.')
+    const response = await fetch('https://token.aikna.cn' + input.path, {
+      method: post ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(30000),
+      headers: { Accept: 'application/json', ...(input.token ? { Authorization: `Bearer ${input.token}` } : {}), ...(post ? { 'Content-Type': 'application/json' } : {}) },
+      ...(post ? { body: JSON.stringify(input.body) } : {}),
+    })
+    if (!response.ok) throw new Error(`New API request failed (HTTP ${response.status}).`)
+    const length = Number(response.headers.get('content-length'))
+    if (Number.isFinite(length) && length > 4 * 1024 * 1024) { await response.body?.cancel(); throw new Error('New API response is too large.') }
+    if (!response.body) throw new Error('New API returned an empty response.')
+    const chunks = []
+    let total = 0
+    for await (const chunk of response.body) {
+      total += chunk.byteLength
+      if (total > 4 * 1024 * 1024) throw new Error('New API response is too large.')
+      chunks.push(chunk)
+    }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  }
+}
 
 function commonProviderFields() {
   return {
@@ -20,6 +57,7 @@ function commonProviderFields() {
     authHeader: Schema.string().default('Authorization'),
     authPrefix: Schema.string().default('Bearer '),
     allowInsecureHttp: Schema.boolean().default(false),
+    timeoutMs: Schema.natural(),
     requestBody: Schema.any(),
   }
 }
@@ -33,6 +71,7 @@ const ImageProviderSchema = Schema.object({
 
 const VideoProviderSchema = Schema.object({
   ...commonProviderFields(),
+  protocol: Schema.string().default('json'),
   statusEndpointTemplate: Schema.string().required(),
   taskIdPath: Schema.string().default('id'),
   statusPath: Schema.string().default('status'),
@@ -45,6 +84,7 @@ const VideoProviderSchema = Schema.object({
 export const Config = Schema.object({
   imageProviders: Schema.array(ImageProviderSchema).default([]).volatile(),
   defaultImageProvider: Schema.string().default('').volatile(),
+  newApiAccount: Schema.any().default(null).volatile(),
   videoProviders: Schema.array(VideoProviderSchema).default([]).volatile(),
   timeoutMs: Schema.natural().default(DEFAULT_TIMEOUT_MS).volatile(),
   maxImageBytes: Schema.natural().default(DEFAULT_MAX_IMAGE_BYTES),
@@ -62,16 +102,22 @@ const toolOutputSchema = {
     imageUrl: { type: 'string' },
     videoUrl: { type: 'string' },
     attachment: { type: 'object', additionalProperties: true },
+    videoAttachment: { type: 'object', additionalProperties: true },
   },
 }
 
 export function apply(ctx, config) {
+  ctx.inject(['typert'], child => {
+    child.plugin(NewApiService)
+    child.typert.register({ package: 'dsh-media-generation-newapi', face: 'host', model: {}, schemas: [], invocations: [newApiDescriptor] })
+  })
   ctx.inject(['settings'], (child) => {
     child.effect(() => child.settings.configure({ auto: false }, ctx.fiber))
   })
   const imageProviders = () => indexProviders(config.imageProviders.get(), 'image')
   const videoProviders = () => indexProviders(config.videoProviders.get(), 'video')
-  const currentTimeoutMs = () => {
+  const currentTimeoutMs = (provider) => {
+    if (Number.isInteger(provider.timeoutMs) && provider.timeoutMs > 0 && provider.timeoutMs <= 4_294_967_295) return provider.timeoutMs
     const raw = typeof config.timeoutMs?.get === 'function' ? config.timeoutMs.get() : config.timeoutMs
     return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS
   }
@@ -117,7 +163,7 @@ export function apply(ctx, config) {
         if (!requested) throw new Error('No default image provider is configured. Select one in deepImage settings.')
         const provider = requireProvider(available, requested, 'image')
         const body = makeImageBody(provider, args)
-        const response = await requestJson(ctx, provider, provider.endpoint, body, exec.signal, currentTimeoutMs(), maxResponseBytes)
+        const response = await requestJson(ctx, provider, provider.endpoint, body, exec.signal, currentTimeoutMs(provider), maxResponseBytes)
         const imageUrl = getPath(response, provider.imageUrlPath)
         const encoded = getPath(response, provider.imageBase64Path)
 
@@ -169,7 +215,7 @@ export function apply(ctx, config) {
       async execute(args, exec) {
         const provider = requireProvider(videoProviders(), args.provider, 'video')
         const body = makeVideoBody(provider, args)
-        const response = await requestJson(ctx, provider, provider.endpoint, body, exec.signal, currentTimeoutMs(), maxResponseBytes)
+        const response = await requestJson(ctx, provider, provider.endpoint, body, exec.signal, currentTimeoutMs(provider), maxResponseBytes)
         const taskId = getPath(response, provider.taskIdPath)
         if (typeof taskId !== 'string' || taskId.length === 0) {
           throw new Error(`Provider "${provider.id}" did not return a task ID at "${provider.taskIdPath}".`)
@@ -192,12 +238,12 @@ export function apply(ctx, config) {
       },
       output: {
         schema: toolOutputSchema,
-        render: (_args, value) => [{ type: 'text', text: value.message }],
+        render: (_args, value) => [{ type: 'text', text: value.message }, ...(value.videoAttachment ? [{ type: 'file', attachment: value.videoAttachment }] : [])],
       },
       async execute(args, exec) {
         const provider = requireProvider(videoProviders(), args.provider, 'video')
         const endpoint = provider.statusEndpointTemplate.replace('{taskId}', encodeURIComponent(args.taskId))
-        const response = await requestJson(ctx, provider, endpoint, undefined, exec.signal, currentTimeoutMs(), maxResponseBytes, 'GET')
+        const response = await requestJson(ctx, provider, endpoint, undefined, exec.signal, currentTimeoutMs(provider), maxResponseBytes, 'GET')
         const status = getPath(response, provider.statusPath)
         const videoUrl = getPath(response, provider.videoUrlPath)
         const providerError = getPath(response, provider.errorPath)
@@ -206,6 +252,11 @@ export function apply(ctx, config) {
           throw new Error(`Provider "${provider.id}" did not return a task status at "${provider.statusPath}".`)
         }
         if (provider.successStatuses.includes(status)) {
+          if (provider.protocol === 'newapi-video') {
+            const attachment = await saveNewApiVideo(ctx, provider, args.taskId, exec.signal, currentTimeoutMs(provider))
+            const path = ctx.get('attachments')?.fileHostPath?.(attachment)
+            return { provider: provider.id, taskId: args.taskId, status, videoAttachment: attachment, message: `Video generation completed with ${provider.id}. The video is saved as an attachment.${path ? ` Host file path: ${path}` : ''}` }
+          }
           if (typeof videoUrl !== 'string' || videoUrl.length === 0) {
             throw new Error(`Task ${args.taskId} succeeded, but no video URL was found at "${provider.videoUrlPath}".`)
           }
@@ -230,11 +281,36 @@ export function apply(ctx, config) {
           provider: provider.id,
           taskId: args.taskId,
           status,
-          message: `Video task ${args.taskId} is still ${status}. Check again later with check_video_task.`,
+          message: `Video task ${args.taskId} is still ${status}.${typeof response.progress === 'number' && response.progress >= 0 && response.progress <= 100 ? ` Progress: ${response.progress}%.` : ''} Check again later with check_video_task.`,
         }
       },
     }))
   }
+}
+
+async function saveNewApiVideo(ctx, provider, taskId, signal, timeoutMs) {
+  const attachments = ctx.get('attachments')
+  if (!attachments) throw new Error('Video attachments are unavailable in the current DSH profile.')
+  const credential = await ctx.credentials.resolve(credentialRef(provider.apiKeyEnv))
+  if (!credential?.value) throw new Error(`No API key is configured for provider "${provider.id}".`)
+  const url = provider.statusEndpointTemplate.replace('{taskId}', encodeURIComponent(taskId)) + '/content'
+  const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+  const response = await fetch(url, { headers: { [provider.authHeader]: `${provider.authPrefix}${credential.value}` }, signal: requestSignal, redirect: 'error' })
+  if (!response.ok || !response.body) throw new Error(`Could not download video for task ${taskId} (HTTP ${response.status}).`)
+  const type = (response.headers.get('content-type') || '').toLowerCase()
+  if (!type.startsWith('video/') && !type.startsWith('application/octet-stream')) { await response.body.cancel(); throw new Error('The video endpoint did not return a video file.') }
+  const limit = 200 * 1024 * 1024
+  const length = Number(response.headers.get('content-length'))
+  if (Number.isFinite(length) && length > limit) { await response.body.cancel(); throw new Error('Generated video exceeds the 200 MB download limit.') }
+  async function* chunks() {
+    let total = 0
+    for await (const chunk of response.body) {
+      total += chunk.byteLength
+      if (total > limit) throw new Error('Generated video exceeds the 200 MB download limit.')
+      yield chunk
+    }
+  }
+  return attachments.saveFileStream({ data: chunks(), signal: requestSignal, name: 'generated-video.mp4' })
 }
 
 function indexProviders(providers, kind) {
@@ -354,6 +430,7 @@ function makeImageBody(provider, args) {
 }
 
 function makeVideoBody(provider, args) {
+  if (provider.protocol === 'newapi-video') return { model: provider.model, prompt: args.prompt, ...(args.duration !== undefined ? { seconds: String(args.duration) } : {}), ...(args.resolution && /^\d+x\d+$/.test(args.resolution) ? { size: args.resolution } : {}) }
   const values = {
     model: provider.model,
     prompt: args.prompt,
