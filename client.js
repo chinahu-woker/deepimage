@@ -176,11 +176,12 @@ window.__ModuleLoader__.load({
         return h('section', { className: 'media-newapi media-newapi-account', 'aria-label': 'New API 账户' },
           h('div', { className: 'media-account-head' },
             h('div', { className: 'media-account-avatar', 'aria-hidden': true }, Array.from(name.trim())[0]?.toUpperCase() || '?'),
-            h('div', { className: 'media-account-name' }, h('strong', null, name), account.username && account.username !== name && h('span', null, account.username), h('span', null, sessionExpired ? 'New API · 需要重新登录' : 'New API · 已连接')),
-            h('button', { type: 'button', className: 'media-form-button', disabled: busy, onClick: () => { setEditing(true); setMessage('') } }, '重新登录')),
+            h('div', { className: 'media-account-name' }, h('strong', null, name), account.username && account.username !== name && h('span', null, account.username), h('span', null, sessionExpired ? 'New API · 需要重新登录' : 'New API · 已连接'))),
           h('div', { className: 'media-account-balance' },
-            h('div', null, h('span', { className: 'media-account-label' }, '可用余额'), h('strong', null, formatNewApiBalance(account)), updated && h('span', { className: 'media-account-updated' }, `更新于 ${updated}`)),
-            h('button', { type: 'button', className: 'media-form-button', disabled: busy, onClick: refresh }, busy ? '刷新中…' : '刷新余额')),
+            h('div', null, h('span', { className: 'media-account-label' }, '可用余额'), h('strong', null, formatNewApiBalance(account)), updated && h('span', { className: 'media-account-updated' }, `更新于 ${updated}`))),
+          h('div', { className: 'media-account-actions' },
+            h('button', { type: 'button', className: 'media-form-button', disabled: busy, onClick: refresh }, busy ? '刷新中…' : '刷新余额'),
+            h('button', { type: 'button', className: 'media-form-button', disabled: busy, onClick: () => { setEditing(true); setMessage('') } }, '重新登录')),
           message && h('p', { role: 'status' }, message))
       }
       return h('form', { className: 'media-newapi', onSubmit: submit },
@@ -336,6 +337,7 @@ window.__ModuleLoader__.load({
       const [openMenu, setOpenMenu] = React.useState(null)
       const [activeKind, setActiveKind] = React.useState('image')
       const value = snapshot.value || {}
+      const shownKind = value.newApiAccount ? activeKind : 'settings'
       const open = (kind, provider, index) => {
         setEditor({ kind, index, revision: snapshot.revision, data: { ...defaults(kind), ...(provider || {}) }, timeoutText: provider?.timeoutMs > 0 ? String(provider.timeoutMs / 1000) : '', statusText: { successStatuses: (provider?.successStatuses ?? ['succeeded', 'completed']).join(', '), failureStatuses: (provider?.failureStatuses ?? ['failed', 'error', 'cancelled', 'expired']).join(', ') } })
         setBody(provider?.requestBody ? JSON.stringify(provider.requestBody, null, 2) : '')
@@ -467,27 +469,28 @@ window.__ModuleLoader__.load({
           .media-form-actions{display:flex;justify-content:flex-end;gap:8px}.media-form-primary{background:var(--dsw-alias-button-primary-fill,#4d6bfe);color:var(--dsw-alias-label-primary-inverted,#fff)!important;border-color:transparent}.media-form-primary:hover{opacity:.9}
           .media-error{margin-top:16px!important;color:var(--dsw-alias-label-danger,#c44);white-space:pre-wrap}
           .media-newapi{display:grid;gap:12px;margin-top:20px;padding:16px;border:1px solid var(--dsw-alias-settings-card-stroke,#e2e5eb);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-settings-card-fill,#f7f8fa)}.media-newapi h3{font-weight:600}.media-newapi p{color:var(--dsw-alias-label-secondary,#6b7280);font-size:13px}.media-newapi label{display:grid;gap:4px;color:var(--dsw-alias-label-secondary,#6b7280)}.media-newapi input{box-sizing:border-box;width:100%;padding:8px 10px;border:1px solid var(--dsw-alias-border-l3,#d9dce3);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1,transparent)}.media-newapi-actions{display:flex;gap:8px}
-          .media-newapi-account{gap:16px}.media-account-head,.media-account-balance{display:flex;align-items:center;gap:12px}.media-account-avatar{display:flex;align-items:center;justify-content:center;flex:none;width:48px;height:48px;border-radius:50%;background:var(--dsw-alias-interactive-bg-hover-accent,#e8edff);color:var(--dsw-alias-brand-text,#4263d9);font-size:20px;font-weight:600}.media-account-name{display:grid;gap:1px;flex:1;min-width:0;overflow-wrap:anywhere}.media-account-name strong{font-size:16px}.media-account-name span,.media-account-label,.media-account-updated{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280)}.media-account-balance{justify-content:space-between;border-top:1px solid var(--dsw-alias-settings-card-stroke,#e2e5eb);padding-top:14px}.media-account-balance>div{display:grid;gap:2px}.media-account-balance strong{font-size:21px;line-height:28px;font-variant-numeric:tabular-nums}.media-account-updated{font-size:11px}
+          .media-newapi-account{gap:16px}.media-account-actions{display:flex;flex-wrap:wrap;gap:8px}.media-account-head,.media-account-balance{display:flex;align-items:center;gap:12px}.media-account-avatar{display:flex;align-items:center;justify-content:center;flex:none;width:48px;height:48px;border-radius:50%;background:var(--dsw-alias-interactive-bg-hover-accent,#e8edff);color:var(--dsw-alias-brand-text,#4263d9);font-size:20px;font-weight:600}.media-account-name{display:grid;gap:1px;flex:1;min-width:0;overflow-wrap:anywhere}.media-account-name strong{font-size:16px}.media-account-name span,.media-account-label,.media-account-updated{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280)}.media-account-balance{justify-content:space-between;border-top:1px solid var(--dsw-alias-settings-card-stroke,#e2e5eb);padding-top:14px}.media-account-balance>div{display:grid;gap:2px}.media-account-balance strong{font-size:21px;line-height:28px;font-variant-numeric:tabular-nums}.media-account-updated{font-size:11px}
           @media(max-width:600px){.media-settings{padding:16px}.media-card-meta{grid-template-columns:1fr;gap:8px}.media-heading{align-items:flex-start}.media-section-description{max-width:28ch}}
         `),
         h('h2', null, 'deepImage'),
         h('p', { className: 'media-intro' }, '管理图片和视频服务商，选择用于自动绘图的默认服务商。'),
-        !editor && snapshot.status === 'ready' && h(UpdatePanel),
         !editor && snapshot.status === 'ready' && h(NewApiLogin, { form, credentials, account: value.newApiAccount }),
-        !editor && snapshot.status === 'ready' && value.newApiAccount && h('div', { className: 'media-tabs', role: 'tablist', 'aria-label': '服务商类型' },
-          ...[['image', '绘图'], ['video', '视频']].map(([kind, label]) => h('button', {
-            key: kind, id: `media-tab-${kind}`, type: 'button', className: 'media-tab', role: 'tab', 'aria-selected': activeKind === kind,
-            'aria-controls': 'media-provider-panel', tabIndex: activeKind === kind ? 0 : -1,
+        !editor && snapshot.status === 'ready' && h('div', { className: 'media-tabs', role: 'tablist', 'aria-label': 'deepImage 页面' },
+          ...(value.newApiAccount ? [['image', '绘图'], ['video', '视频'], ['settings', '设置']] : [['settings', '设置']]).map(([kind, label]) => h('button', {
+            key: kind, id: `media-tab-${kind}`, type: 'button', className: 'media-tab', role: 'tab', 'aria-selected': shownKind === kind,
+            'aria-controls': kind === 'settings' ? 'media-settings-panel' : 'media-provider-panel', tabIndex: shownKind === kind ? 0 : -1,
             onClick: () => { setOpenMenu(null); setError(''); setActiveKind(kind) },
             onKeyDown: e => {
               if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
               e.preventDefault()
-              const next = kind === 'image' ? 'video' : 'image'
+              const kinds = value.newApiAccount ? ['image', 'video', 'settings'] : ['settings']
+              const next = kinds[(kinds.indexOf(kind) + (e.key === 'ArrowRight' ? 1 : -1) + kinds.length) % kinds.length]
               setOpenMenu(null); setError(''); setActiveKind(next)
               e.currentTarget.parentElement.querySelector(`[data-media-kind="${next}"]`)?.focus()
             }, 'data-media-kind': kind,
           }, label))),
-        snapshot.status !== 'ready' ? h('p', null, snapshot.status === 'loading' ? '正在加载配置…' : '配置暂不可用。') : value.newApiAccount && !editor && h('div', { id: 'media-provider-panel', role: 'tabpanel', 'aria-labelledby': `media-tab-${activeKind}` }, section(activeKind, activeKind === 'image' ? '绘图服务商' : '视频服务商')),
+        snapshot.status !== 'ready' ? h('p', null, snapshot.status === 'loading' ? '正在加载配置…' : '配置暂不可用。') : value.newApiAccount && !editor && shownKind !== 'settings' && h('div', { id: 'media-provider-panel', role: 'tabpanel', 'aria-labelledby': `media-tab-${shownKind}` }, section(shownKind, shownKind === 'image' ? '绘图服务商' : '视频服务商')),
+        snapshot.status === 'ready' && h('div', { id: 'media-settings-panel', role: 'tabpanel', 'aria-labelledby': 'media-tab-settings', hidden: !!editor || shownKind !== 'settings' }, h(UpdatePanel)),
         value.newApiAccount && error && h('p', { className: 'media-error', role: 'alert' }, error),
         value.newApiAccount && editor && h('form', { className: 'media-form', onSubmit: save },
           h('h3', null, `${editor.index === null ? '添加' : '编辑'}${editor.kind === 'image' ? '绘图' : '视频'}服务商`),
