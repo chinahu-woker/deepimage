@@ -33,8 +33,8 @@
 
 下载并解压安装器，打开后可选择开源版或 New API 公司版：
 
-- [下载 macOS 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.3/deepImage-installer-macOS.zip)
-- [下载 Windows 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.3/deepImage-installer-Windows.zip)
+- [下载 macOS 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.4/deepImage-installer-macOS.zip)
+- [下载 Windows 安装器](https://github.com/chinahu-woker/deepimage/releases/download/newapi-v0.1.4/deepImage-installer-Windows.zip)
 
 安装前请先启动一次 DeepSeek Harness 桌面版，再完全退出。macOS 双击「安装 deepImage.app」；Windows 双击 `Install deepImage.cmd`。安装可能需要联网。
 
@@ -47,7 +47,7 @@
 1. 从 [Releases](https://github.com/chinahu-woker/deepimage/releases) 下载开源版安装包，并在下载目录运行：
 
    ```sh
-   dsh plugin --profile web add ./deepimage-open-source-0.1.2.tgz
+   dsh plugin --profile web add ./deepimage-open-source-0.1.3.tgz
    dsh --profile web
    ```
 
@@ -72,7 +72,7 @@
 
 ## 检查插件更新
 
-安装包含更新功能的版本后，打开 **设置 → deepImage → 插件更新**，点击“检查更新”；发现新版本时点击“更新到”即可安装。开源版和 New API 公司版分别检查各自的 Release，更新后按提示重启应用。
+安装包含更新功能的版本后，打开 **设置 → deepImage → 设置 → 插件更新**，点击“检查更新”；发现新版本时点击“更新到”即可安装。开源版和 New API 公司版分别检查各自的 Release，更新后按提示重启应用。
 
 公开仓库的更新无需 GitHub Token。旧版本如无法直接更新，可先手动安装一次新版本；本地源码链接不会被自动覆盖。
 

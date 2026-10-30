@@ -253,7 +253,6 @@ window.__ModuleLoader__.load({
         `),
         h('h2', null, 'deepImage'),
         h('p', { className: 'media-intro' }, '管理图片和视频服务商，选择用于自动绘图的默认服务商。'),
-        !editor && snapshot.status === 'ready' && h(UpdatePanel),
         !editor && snapshot.status === 'ready' && h('div', { className: 'media-global' },
           h('div', null,
             h('strong', null, '生成超时'),
@@ -262,20 +261,22 @@ window.__ModuleLoader__.load({
             h('input', { type: 'number', min: 1, step: 1, inputMode: 'numeric', value: timeoutValue, disabled: !snapshot.writable || timeoutBusy, onChange: e => setTimeoutDraft(e.target.value) }),
             h('span', null, '秒'),
             h('button', { type: 'button', className: 'media-form-button', disabled: !snapshot.writable || timeoutBusy || timeoutDraft === null, onClick: saveTimeout }, timeoutBusy ? '保存中…' : '保存'))),
-        !editor && h('div', { className: 'media-tabs', role: 'tablist', 'aria-label': '服务商类型' },
-          ...[['image', '绘图'], ['video', '视频']].map(([kind, label]) => h('button', {
+        !editor && h('div', { className: 'media-tabs', role: 'tablist', 'aria-label': 'deepImage 页面' },
+          ...[['image', '绘图'], ['video', '视频'], ['settings', '设置']].map(([kind, label]) => h('button', {
             key: kind, id: `media-tab-${kind}`, type: 'button', className: 'media-tab', role: 'tab', 'aria-selected': activeKind === kind,
-            'aria-controls': 'media-provider-panel', tabIndex: activeKind === kind ? 0 : -1,
+            'aria-controls': kind === 'settings' ? 'media-settings-panel' : 'media-provider-panel', tabIndex: activeKind === kind ? 0 : -1,
             onClick: () => { setOpenMenu(null); setError(''); setActiveKind(kind) },
             onKeyDown: e => {
               if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
               e.preventDefault()
-              const next = kind === 'image' ? 'video' : 'image'
+              const kinds = ['image', 'video', 'settings']
+              const next = kinds[(kinds.indexOf(kind) + (e.key === 'ArrowRight' ? 1 : -1) + kinds.length) % kinds.length]
               setOpenMenu(null); setError(''); setActiveKind(next)
               e.currentTarget.parentElement.querySelector(`[data-media-kind="${next}"]`)?.focus()
             }, 'data-media-kind': kind,
           }, label))),
-        snapshot.status !== 'ready' ? h('p', null, snapshot.status === 'loading' ? '正在加载配置…' : '配置暂不可用。') : !editor && h('div', { id: 'media-provider-panel', role: 'tabpanel', 'aria-labelledby': `media-tab-${activeKind}` }, section(activeKind, activeKind === 'image' ? '绘图服务商' : '视频服务商')),
+        snapshot.status !== 'ready' ? h('p', null, snapshot.status === 'loading' ? '正在加载配置…' : '配置暂不可用。') : !editor && activeKind !== 'settings' && h('div', { id: 'media-provider-panel', role: 'tabpanel', 'aria-labelledby': `media-tab-${activeKind}` }, section(activeKind, activeKind === 'image' ? '绘图服务商' : '视频服务商')),
+        snapshot.status === 'ready' && h('div', { id: 'media-settings-panel', role: 'tabpanel', 'aria-labelledby': 'media-tab-settings', hidden: !!editor || activeKind !== 'settings' }, h(UpdatePanel)),
         error && h('p', { className: 'media-error', role: 'alert' }, error),
         editor && h('form', { className: 'media-form', onSubmit: save },
           h('h3', null, `${editor.index === null ? '添加' : '编辑'}${editor.kind === 'image' ? '绘图' : '视频'}服务商`),
