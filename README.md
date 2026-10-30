@@ -30,6 +30,15 @@
 - **灵活配置**：管理多个服务商，为每个 API 设置请求超时，并通过高级配置适配不同的请求与响应格式。
 - **生成反馈**：图片生成期间显示加载动画和估算进度，方便了解等待状态。
 
+## 桌面版安装器
+
+安装器包含开源版和公司版，解压后双击打开并选择所需版本：
+
+- [下载 macOS 安装器](https://github.com/chinahu-woker/deepimage/raw/main/downloads/deepImage-installer-macOS.zip)
+- [下载 Windows 安装器](https://github.com/chinahu-woker/deepimage/raw/main/downloads/deepImage-installer-Windows.zip)
+
+安装前请先启动一次 DeepSeek Harness 桌面版，再完全退出。安装可能需要联网。macOS 安装器尚未经过 Apple 公证，Windows 安装器尚未签名，也尚未在 Windows 真机验证，系统可能阻止运行。使用步骤与构建要求见 [桌面安装器说明](installer/README.md)。
+
 ## 快速开始
 
 需要安装 DeepSeek Harness、Node.js 和 pnpm。本分支已在 Harness `0.2.1-rc.2` 开发环境中验证；Harness 仍处于预览阶段，其他版本的插件 API 可能有所差异。

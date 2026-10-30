@@ -18,7 +18,8 @@
     "cordis.patch.yml",
     "README.md",
     "README.zh.md",
-    "docs/poster/deepimage-banner-1280.png"
+    "docs/poster/deepimage-banner-1280.png",
+    "installer/README.md"
   ],
   "license": "MIT",
   "scripts": {
