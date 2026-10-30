@@ -1,50 +1,82 @@
-# deepImage
+<p align="center">
+  <img src="docs/poster/deepimage-banner-1280.png" alt="deepImage — 在对话里，说一句就出图" width="100%">
+</p>
 
-deepImage 是一个 DeepSeek Harness 插件，为对话接入可配置的图片和视频生成 API。可以在设置页管理多个服务商，使用自然语言请求绘图，并查询异步视频任务。
+<h1 align="center">deepImage</h1>
 
-## 安装
+<p align="center">
+  为 DeepSeek Harness 接入图片与视频生成，让创意从一句话开始。
+</p>
 
-需要 DeepSeek Harness、Node.js 和 pnpm。当前开发环境验证的 Harness 版本为 `0.2.1-rc.2`；Harness 仍处于预览阶段，不同版本的插件 API 可能存在差异。
+<p align="center">
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#功能一览">功能一览</a> ·
+  <a href="#配置与使用">配置与使用</a> ·
+  <a href="README.zh.md">详细文档</a> ·
+  <a href="LICENSE">MIT 许可证</a>
+</p>
 
-从仓库的 Releases 下载 `dsh-media-generation-0.1.0.tgz`，然后在下载目录运行：
+## 选择版本
 
-```sh
-dsh plugin --profile web add ./dsh-media-generation-0.1.0.tgz
-dsh --profile web
-```
+当前页面介绍 **开源版**：手动配置图片和视频服务商，适合使用自己的 API 服务。公司使用的 [New API 版](https://github.com/chinahu-woker/deepimage/tree/newapi-login) 支持登录 AIKNA 后自动配置兼容模型。
 
-如果使用其他 profile，将命令中的 `web` 替换为实际名称。插件安装到正在运行的 profile 后，需要重启该 profile。私有仓库的安装包仅对有仓库访问权限的用户可用。
+两个版本使用相同的插件标识，请根据需要选择其一安装。开源版的发布标签以 `v` 开头，公司版以 `newapi-v` 开头；下载 Release 时请留意安装包名称。
 
-也可以从本地源码安装（克隆私有仓库时需使用有访问权限的 GitHub 账号）：
+## 功能一览
 
-```sh
-git clone https://github.com/chinahu-woker/deepimage.git
-cd deepimage
-dsh plugin --profile web add .
-```
+- **对话生图**：选择默认绘图服务商后，直接在对话中描述想要的画面。
+- **视频生成**：提交异步视频任务，并查询任务状态和结果。
+- **灵活配置**：管理多个图片和视频服务商，通过高级配置适配不同的请求与响应格式。
+- **凭据管理**：通过 Harness 凭据服务或环境变量提供 API Key。
+
+## 快速开始
+
+需要安装 DeepSeek Harness、Node.js 和 pnpm。当前开发环境验证的 Harness 版本为 `0.2.1-rc.2`；Harness 仍处于预览阶段，其他版本的插件 API 可能有所差异。
+
+1. 从 [Releases](https://github.com/chinahu-woker/deepimage/releases) 下载开源版安装包，并在下载目录运行：
+
+   ```sh
+   dsh plugin --profile web add ./dsh-media-generation-0.1.0.tgz
+   dsh --profile web
+   ```
+
+   旧版 `v0.1.0` 安装包使用上述文件名；按新流程发布的开源版安装包使用 `deepimage-open-source-<版本号>.tgz` 命名。如果使用其他 profile，将 `web` 替换为实际名称。安装到正在运行的 profile 后，需要重启该 profile。
+
+   也可以从源码安装：
+
+   ```sh
+   git clone --branch main https://github.com/chinahu-woker/deepimage.git
+   cd deepimage
+   dsh plugin --profile web add .
+   dsh --profile web
+   ```
+
+2. 打开 **设置 → deepImage**，在“绘图”或“视频”选项卡中添加服务商，填写 API 地址、模型 ID 和凭据引用。
+
+3. 在绘图服务商卡片的更多操作中选择“设为默认”，然后在对话里试试：
+
+   > 画一张雨后霓虹街道的电影感插画。
+
+模型会根据对话内容决定是否调用绘图工具。视频生成则通过创建任务和查询状态获取结果。
 
 ## 配置与使用
 
-打开 Harness 的 **设置 → deepImage**，在“绘图”或“视频”选项卡中添加服务商。填写 API 地址、模型 ID 和凭据引用；API Key 可以在页面中写入 Harness 凭据服务，或复用已有的凭据引用。
+API Key 可保存到 Harness 凭据服务，也可通过环境变量提供。不同服务商的协议和模型参数可能不同，可在高级设置中调整请求体和响应字段路径。
 
-在绘图服务商卡片的更多操作中选择“设为默认”，之后可以直接在对话中说“画一张……”。模型会根据请求决定是否调用绘图工具。视频生成采用异步任务：先创建任务，再查询状态和结果。
+设置页的“生成超时”用于控制单次请求的等待上限；图片生成通常需要较长时间，可按需调高。配置文件中的全局 `timeoutMs` 使用毫秒，未设置时默认为 60 秒。
 
-“生成超时”字段用于设置单次生成请求的等待上限（秒），默认 180 秒；图片生成通常需要较长时间，可按需调高。该值也可在 profile 的 `cordis.patch.yml` 中通过 `timeoutMs`（毫秒）配置。
+更多配置、开发与调试说明见 [详细文档](README.zh.md)。
 
-不同服务商的 API 协议可能不同，需要按其文档调整高级设置中的请求体和响应字段路径。HTTP 仅用于明确启用的临时调试，密钥会通过网络明文传输。
-
-更多配置、开发和调试细节见 [中文说明](README.zh.md)。
-
-## 从源码构建安装包
+## 打包与发布
 
 ```sh
 mkdir -p dist
 npm run pack:plugin
 ```
 
-生成的 `.tgz` 可以用上面的 `dsh plugin ... add` 命令安装。
+本地打包生成 `dsh-media-generation-<版本号>.tgz`，可通过 `dsh plugin --profile web add <安装包路径>` 安装。
 
-发布时，先更新 `package.json` 的版本号并提交，再推送与版本一致的 Git 标签（例如 `v0.1.0`）。仓库的 GitHub Actions 会打包并创建包含 `.tgz` 的 Release。私有仓库的 Release 和安装包遵循仓库访问权限。
+开源版在 `main` 分支维护：更新 `package.json` 版本并提交后，推送对应标签（例如 `v0.1.1`）。GitHub Actions 会生成名为 `deepimage-open-source-<版本号>.tgz` 的 Release 安装包。公司版的标签和发布步骤见 [New API 版说明](https://github.com/chinahu-woker/deepimage/tree/newapi-login#打包与发布)。仓库和 Release 的可见性遵循 GitHub 仓库访问权限。
 
 ## 许可证
 

@@ -1,4 +1,4 @@
-name: Build and publish plugin package
+name: Build and publish open-source plugin
 
 on:
   push:
@@ -18,12 +18,14 @@ jobs:
           node-version: '22'
           package-manager-cache: false
       - name: Check release version
-        run: node -e 'if (process.env.GITHUB_REF_NAME !== "v" + require("./package.json").version) { console.error("Tag must match package.json version"); process.exit(1) }'
+        run: node -e 'if (process.env.GITHUB_REF_NAME !== "v" + require("./package.json").version) { console.error("Open-source tag must match v<package.json version>"); process.exit(1) }'
       - name: Package plugin
         run: |
           mkdir -p dist
           npm run pack:plugin
+          version=$(node -p 'require("./package.json").version')
+          mv "dist/dsh-media-generation-${version}.tgz" "dist/deepimage-open-source-${version}.tgz"
       - name: Create release with package
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/*.tgz --title "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" dist/deepimage-open-source-*.tgz --title "deepImage 开源版 $GITHUB_REF_NAME" --generate-notes

@@ -15,7 +15,8 @@
     "locale",
     "cordis.patch.yml",
     "README.md",
-    "README.zh.md"
+    "README.zh.md",
+    "docs/poster/deepimage-banner-1280.png"
   ],
   "license": "MIT",
   "scripts": {
