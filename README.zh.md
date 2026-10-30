@@ -58,3 +58,7 @@ pnpm exec dsh --profile media-dev
 - 不同服务商仍需按其官方 API 文档配置请求体、认证头和响应路径。添加凭据不能自动让不兼容的 API 变成兼容接口。
 
 DeepSeek Harness 处于 developer preview，发布前应在目标 DSH 版本上验证配置与 API 行为，并收窄 `engines.dsh` 范围。
+
+## 插件更新
+
+在「设置 → deepImage → 插件更新」中检查并安装当前版本的更新。私有仓库需要先保存具备该仓库 Contents 只读权限的 GitHub Token。更新包从对应版本的 GitHub Release 下载，并验证 SHA-256；源码链接需要通过更新源码的方式维护。

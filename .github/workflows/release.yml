@@ -28,4 +28,4 @@ jobs:
       - name: Create release with package
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/deepimage-open-source-*.tgz --title "deepImage 开源版 $GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" dist/deepimage-open-source-*.tgz --title "deepImage 开源版 $GITHUB_REF_NAME" --verify-tag --notes-file .github/release-notes-oss.md
