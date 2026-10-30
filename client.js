@@ -29,6 +29,8 @@ window.__ModuleLoader__.load({
       return data
     }
 
+    const withNewApiLock = action => navigator.locks ? navigator.locks.request('deepimage-newapi-account', action) : action()
+
     async function configureNewApi(bundle, form, credentials) {
       const token = bundle?.access_token
       const userId = bundle?.user?.id
@@ -79,7 +81,11 @@ window.__ModuleLoader__.load({
       }
       const saved = await credentials.set(ref, key)
       if (!saved.ok) throw new Error(saved.error?.message || 'API 密钥保存失败。')
-      const defaultImage = current.defaultImageProvider && imageProviders.some(item => item.id === current.defaultImageProvider) ? current.defaultImageProvider : imageModels.length ? `${prefix}image:${imageModels[0].model_name}` : ''
+      const oldDefault = current.defaultImageProvider
+      const oldDefaultProvider = imageProviders.find(item => item.id === oldDefault)
+      const ownerId = oldDefaultProvider && /^newapi:(\d+):/.exec(oldDefaultProvider.id)?.[1]
+      const credentialOwner = oldDefaultProvider && /^DEEPIMAGE_NEWAPI_(\d+)$/.exec(oldDefaultProvider.apiKeyEnv)?.[1]
+      const defaultImage = oldDefaultProvider && (!ownerId || ownerId === String(userId)) && (!credentialOwner || credentialOwner === String(userId)) ? oldDefault : imageModels.length ? `${prefix}image:${imageModels[0].model_name}` : ''
       const [selfResult, statusResult] = await Promise.allSettled([newApiRequest('/api/user/self', { token }), newApiRequest('/api/status')])
       const self = selfResult.status === 'fulfilled' && selfResult.value.data?.id === userId ? selfResult.value.data : bundle.user
       const account = newApiAccount(self, statusResult.status === 'fulfilled' ? statusResult.value.data : null)
@@ -115,13 +121,14 @@ window.__ModuleLoader__.load({
       return `${symbol}${new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(account.quota / account.quotaPerUnit * rate)}`
     }
 
-    function NewApiLogin({ form, credentials, account }) {
+    function NewApiLogin({ form, credentials, account, onBusyChange }) {
       const [username, setUsername] = React.useState('')
       const [password, setPassword] = React.useState('')
       const [code, setCode] = React.useState('')
       const [challenge, setChallenge] = React.useState(null)
       const [busy, setBusy] = React.useState(false)
       const busyRef = React.useRef(false)
+      const setAccountBusy = value => { setBusy(value); onBusyChange(value) }
       const [message, setMessage] = React.useState('')
       const [editing, setEditing] = React.useState(false)
       const [sessionExpired, setSessionExpired] = React.useState(false)
@@ -129,8 +136,9 @@ window.__ModuleLoader__.load({
         event.preventDefault()
         if (busyRef.current) return
         busyRef.current = true
-        setBusy(true); setMessage('')
+        setAccountBusy(true); setMessage('')
         try {
+          await withNewApiLock(async () => {
           const response = challenge
             ? await newApiRequest('/api/user/login/verify', { body: { flow_token: challenge.flow_token, method: '2fa', code: code.trim() } })
             : await newApiRequest('/api/user/login', { body: { username: username.trim(), password } })
@@ -145,43 +153,73 @@ window.__ModuleLoader__.load({
             setSessionExpired(false)
             setMessage(`连接成功：已配置 ${result.images} 个图片模型和 ${result.videos} 个视频模型。`)
           }
-        } catch (error) { setMessage(error.message || '连接失败，请稍后重试。') } finally { busyRef.current = false; setBusy(false) }
+          })
+        } catch (error) { setMessage(error.message || '连接失败，请稍后重试。') } finally { busyRef.current = false; setAccountBusy(false) }
       }
       const refresh = async () => {
         if (busyRef.current) return
-        busyRef.current = true; setBusy(true); setMessage('')
+        busyRef.current = true; setAccountBusy(true); setMessage('')
         try {
+          await withNewApiLock(async () => {
           if (!newApiSession || newApiSession.id !== account.id || !(newApiSession.expiresAt > Date.now() + 30000)) {
             const response = await newApiRequest('/api/user/auth/refresh', { body: { userId: account.id } })
             const session = response.data
             if (session?.user?.id !== account.id || typeof session.access_token !== 'string' || !Number.isFinite(session.access_expires_at) || session.access_expires_at * 1000 <= Date.now()) throw new Error('登录会话无效，请重新登录。')
             newApiSession = { token: session.access_token, id: account.id, expiresAt: session.access_expires_at * 1000 }
           }
-          const [self, status] = await Promise.all([newApiRequest('/api/user/self', { token: newApiSession.token }), newApiRequest('/api/status')])
+          const activeSession = newApiSession
+          const [self, status] = await Promise.all([newApiRequest('/api/user/self', { token: activeSession.token }), newApiRequest('/api/status')])
           if (self.data?.id !== account.id) throw new Error('账户信息已变化，请重新登录。')
           const snapshot = form.getSnapshot()
-          if (snapshot.value?.newApiAccount?.id !== account.id) throw new Error('当前账户已更换，请重试。')
+          if (snapshot.value?.newApiAccount?.id !== account.id) throw new Error('当前登录会话已更换，请刷新页面。')
           const ok = await form.mutate([{ op: 'set', path: ['newApiAccount'], value: newApiAccount(self.data, status.data) }], snapshot.revision)
           if (!ok) throw new Error('余额未更新，请重试。')
           setSessionExpired(false)
+          })
         } catch (error) {
           if (/登录会话.*(?:重新登录|失效|无效)/.test(error.message || '')) setSessionExpired(true)
           setMessage(error.message || '刷新余额失败，请稍后重试。')
-        } finally { busyRef.current = false; setBusy(false) }
+        } finally { busyRef.current = false; setAccountBusy(false) }
       }
+      const logout = async () => {
+        if (busyRef.current) return
+        if (!form.getSnapshot().writable) { setMessage('当前配置不可写，无法退出登录。'); return }
+        busyRef.current = true; setAccountBusy(true); setMessage('')
+        try {
+          await withNewApiLock(async () => {
+          await newApiRequest('/api/user/auth/logout', { body: { userId: account.id } })
+          newApiSession = null
+          setSessionExpired(true)
+          let saved = false
+          for (let attempt = 0; attempt < 3 && !saved; attempt++) {
+            const snapshot = form.getSnapshot()
+            if (!snapshot.value?.newApiAccount) { saved = true; break }
+            if (snapshot.value.newApiAccount.id !== account.id) throw new Error('当前登录会话已更换，请刷新页面。')
+            if (!snapshot.writable) break
+            saved = await form.mutate([{ op: 'set', path: ['newApiAccount'], value: null }], snapshot.revision)
+          }
+          if (!saved) throw new Error('会话已退出，但配置未保存，请再次点击退出登录。')
+          setEditing(false); setChallenge(null); setPassword(''); setCode(''); setSessionExpired(false)
+          setMessage('已退出登录。')
+          })
+        } catch (error) { newApiSession = null; setSessionExpired(true); setMessage(error.message || '退出登录失败，请稍后重试。') }
+        finally { busyRef.current = false; setAccountBusy(false) }
+      }
+      const icon = (label, paths, onClick) => h('button', { type: 'button', className: 'media-account-icon', disabled: busy || (label === '退出登录' && !form.getSnapshot().writable), onClick, title: label, 'aria-label': label },
+        h('svg', { viewBox: '0 0 24 24', width: 18, height: 18, fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, ...paths.map((d, index) => h('path', { d, key: index }))))
       React.useEffect(() => { if (account?.id) void refresh() }, [account?.id])
       if (account && !editing) {
         const name = account.displayName || account.username || 'New API 用户'
         const updated = Number.isFinite(account.updatedAt) ? new Date(account.updatedAt).toLocaleString('zh-CN', { hour12: false }) : ''
         return h('section', { className: 'media-newapi media-newapi-account', 'aria-label': 'New API 账户' },
-          h('div', { className: 'media-account-head' },
+          h('div', { className: 'media-account-main' },
             h('div', { className: 'media-account-avatar', 'aria-hidden': true }, Array.from(name.trim())[0]?.toUpperCase() || '?'),
-            h('div', { className: 'media-account-name' }, h('strong', null, name), account.username && account.username !== name && h('span', null, account.username), h('span', null, sessionExpired ? 'New API · 需要重新登录' : 'New API · 已连接'))),
-          h('div', { className: 'media-account-balance' },
-            h('div', null, h('span', { className: 'media-account-label' }, '可用余额'), h('strong', null, formatNewApiBalance(account)), updated && h('span', { className: 'media-account-updated' }, `更新于 ${updated}`))),
-          h('div', { className: 'media-account-actions' },
-            h('button', { type: 'button', className: 'media-form-button', disabled: busy, onClick: refresh }, busy ? '刷新中…' : '刷新余额'),
-            h('button', { type: 'button', className: 'media-form-button', disabled: busy, onClick: () => { setEditing(true); setMessage('') } }, '重新登录')),
+            h('div', { className: 'media-account-name' }, h('strong', null, name), account.username && account.username !== name && h('span', null, account.username), h('span', null, sessionExpired ? 'New API · 需要重新登录' : 'New API · 已连接')),
+            h('div', { className: 'media-account-balance' }, h('span', { className: 'media-account-label' }, '可用余额'), h('strong', null, formatNewApiBalance(account)), updated && h('span', { className: 'media-account-updated' }, `更新于 ${updated}`)),
+            h('div', { className: 'media-account-actions' },
+              icon('刷新余额', ['M20 7v5h-5', 'M4 17v-5h5', 'M5.6 9a7 7 0 0 1 11.9-2L20 12', 'M4 12l2.5 5a7 7 0 0 0 11.9-2'], refresh),
+              icon('重新登录', ['M20 11a8 8 0 1 0-2.5 5.8', 'M20 4v7h-7', 'M12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6', 'M7.8 18a5 5 0 0 1 8.4 0'], () => { setEditing(true); setMessage('') }),
+              icon('退出登录', ['M10 17l5-5-5-5', 'M15 12H3', 'M12 3h6a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3h-6'], logout))),
           message && h('p', { role: 'status' }, message))
       }
       return h('form', { className: 'media-newapi', onSubmit: submit },
@@ -336,8 +374,10 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false)
       const [openMenu, setOpenMenu] = React.useState(null)
       const [activeKind, setActiveKind] = React.useState('image')
+      const [accountBusy, setAccountBusy] = React.useState(false)
       const value = snapshot.value || {}
       const shownKind = value.newApiAccount ? activeKind : 'settings'
+      React.useEffect(() => { if (!value.newApiAccount) { setEditor(null); setSecret(''); setError('') } }, [value.newApiAccount?.id])
       const open = (kind, provider, index) => {
         setEditor({ kind, index, revision: snapshot.revision, data: { ...defaults(kind), ...(provider || {}) }, timeoutText: provider?.timeoutMs > 0 ? String(provider.timeoutMs / 1000) : '', statusText: { successStatuses: (provider?.successStatuses ?? ['succeeded', 'completed']).join(', '), failureStatuses: (provider?.failureStatuses ?? ['failed', 'error', 'cancelled', 'expired']).join(', ') } })
         setBody(provider?.requestBody ? JSON.stringify(provider.requestBody, null, 2) : '')
@@ -409,25 +449,25 @@ window.__ModuleLoader__.load({
         } catch (err) { setError(err.message || String(err)) } finally { setBusy(false) }
       }
       const section = (kind, title) => {
-        const list = value[kind === 'image' ? 'imageProviders' : 'videoProviders'] || []
+        const list = (value[kind === 'image' ? 'imageProviders' : 'videoProviders'] || []).map((provider, index) => ({ provider, index })).filter(({ provider }) => { const idOwner = /^newapi:(\d+):/.exec(provider.id)?.[1]; const credentialOwner = /^DEEPIMAGE_NEWAPI_(\d+)$/.exec(provider.apiKeyEnv)?.[1]; const activeId = String(value.newApiAccount?.id || ''); return (!idOwner || idOwner === activeId) && (!credentialOwner || credentialOwner === activeId) })
         return h('section', { className: 'media-section', key: kind },
           h('div', { className: 'media-heading' },
             h('div', null, h('h3', null, title), h('p', { className: 'media-section-description' }, kind === 'image' ? '用于在对话中生成图片' : '用于创建和查询视频任务')),
-            h('button', { type: 'button', className: 'media-add', disabled: !snapshot.writable || busy, onClick: () => open(kind, null, null) }, h('span', { 'aria-hidden': true }, '+'), '添加服务商')),
-          list.length ? h('div', { className: 'media-card-list' }, list.map((provider, index) => h('article', { className: 'media-card', key: provider.id },
-            h('div', { className: 'media-card-top' },
+            h('button', { type: 'button', className: 'media-add', disabled: !snapshot.writable || busy || accountBusy, onClick: () => open(kind, null, null) }, h('span', { 'aria-hidden': true }, '+'), '添加服务商')),
+          list.length ? h('div', { className: 'media-card-list' }, list.map(({ provider, index }) => h('article', { className: 'media-card', key: provider.id },
+            h('div', { className: 'media-card-body' },
               h('div', { className: 'media-card-identity' }, h('strong', null, provider.model), kind === 'image' && value.defaultImageProvider === provider.id && h('span', { className: 'media-badge' }, '默认')),
-              h('div', { className: 'media-card-actions' },
-                h('button', { type: 'button', className: 'media-edit', disabled: busy || !snapshot.writable, onClick: () => open(kind, provider, index) }, '编辑'),
-                h(Menu, {
-                  open: openMenu === `${kind}:${provider.id}`,
-                  onClose: () => setOpenMenu(null), align: 'end', portal: true, autoFocus: true,
-                  anchor: h('button', { type: 'button', className: 'media-more', disabled: busy || !snapshot.writable, 'aria-label': `${provider.model}（${provider.apiKeyEnv}）的更多操作`, 'aria-haspopup': 'menu', 'aria-expanded': openMenu === `${kind}:${provider.id}`, onClick: () => setOpenMenu(current => current === `${kind}:${provider.id}` ? null : `${kind}:${provider.id}`) }, '•••'),
-                },
-                kind === 'image' && value.defaultImageProvider !== provider.id && h(MenuItemButton, { onSelect: () => { setOpenMenu(null); setDefault(provider.id) } }, '设为默认'),
-                h(MenuItemButton, { onSelect: () => { setOpenMenu(null); remove(kind, index) } }, '删除服务商')))),
-            h('div', { className: 'media-card-meta' },
-              h('div', null, h('span', null, '凭据引用'), h('span', { title: provider.apiKeyEnv }, provider.apiKeyEnv)))))) : h('div', { className: 'media-empty' }, '暂无服务商，添加后即可使用。'))
+              h('div', { className: 'media-card-meta' },
+                h('div', null, h('span', null, '凭据引用'), h('span', { title: provider.apiKeyEnv }, provider.apiKeyEnv)))),
+            h('div', { className: 'media-card-actions' },
+              h('button', { type: 'button', className: 'media-edit', disabled: busy || accountBusy || !snapshot.writable, onClick: () => open(kind, provider, index) }, '编辑'),
+              h(Menu, {
+                open: openMenu === `${kind}:${provider.id}`,
+                onClose: () => setOpenMenu(null), align: 'end', portal: true, autoFocus: true,
+                anchor: h('button', { type: 'button', className: 'media-more', disabled: busy || accountBusy || !snapshot.writable, 'aria-label': `${provider.model}（${provider.apiKeyEnv}）的更多操作`, 'aria-haspopup': 'menu', 'aria-expanded': openMenu === `${kind}:${provider.id}`, onClick: () => setOpenMenu(current => current === `${kind}:${provider.id}` ? null : `${kind}:${provider.id}`) }, '•••'),
+              },
+              kind === 'image' && value.defaultImageProvider !== provider.id && h(MenuItemButton, { onSelect: () => { setOpenMenu(null); setDefault(provider.id) } }, '设为默认'),
+              h(MenuItemButton, { onSelect: () => { setOpenMenu(null); remove(kind, index) } }, '删除服务商')))))) : h('div', { className: 'media-empty' }, '暂无服务商，添加后即可使用。'))
       }
       return h('div', { className: 'media-settings' },
         h('style', null, `
@@ -451,13 +491,12 @@ window.__ModuleLoader__.load({
           .media-add,.media-form-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:0 12px;border:1px solid var(--dsw-alias-border-l3,#d9dce3);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1,transparent);white-space:nowrap}
           .media-add span{font-size:18px;line-height:1}
           .media-add:hover,.media-form-button:hover,.media-edit:hover,.media-more:hover{background:var(--dsw-alias-interactive-bg-hover,#e9ebf0)}
-          .media-card-list{display:grid;gap:10px}
-          .media-card{position:relative;min-width:0;padding:16px;border:1px solid var(--dsw-alias-settings-card-stroke,#e2e5eb);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-settings-card-fill,#f7f8fa)}
-          .media-card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
-          .media-card-identity{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-width:0;padding-top:4px}
+          .media-card-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:10px}
+          .media-card{position:relative;display:flex;flex-direction:column;min-width:0;border:1px solid var(--dsw-alias-settings-card-stroke,#e2e5eb);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-settings-card-fill,#f7f8fa)}.media-card-body{flex:1;min-width:0;padding:16px 16px 18px}
+                    .media-card-identity{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-width:0;padding-top:4px}
           .media-card-identity strong{font-weight:600;overflow-wrap:anywhere}
           .media-badge{display:inline-flex;align-items:center;padding:1px 8px;border-radius:999px;color:var(--dsw-alias-brand-text,#4263d9);background:var(--dsw-alias-interactive-bg-hover-accent,#e8edff);font-size:12px;line-height:20px;font-weight:500}
-          .media-card-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}
+          .media-card-actions{display:flex;justify-content:flex-end;align-items:center;gap:4px;min-height:46px;padding:4px 10px;border-top:1px solid var(--dsw-alias-settings-card-stroke,#e2e5eb)}
           .media-edit,.media-more{display:inline-flex;align-items:center;justify-content:center;min-height:30px;border:0;border-radius:var(--dsw-radius-xs,4px);background:transparent}
           .media-edit{padding:0 9px;color:var(--dsw-alias-label-secondary,#5b6170)!important}
           .media-more{width:32px;letter-spacing:1px}
@@ -469,12 +508,13 @@ window.__ModuleLoader__.load({
           .media-form-actions{display:flex;justify-content:flex-end;gap:8px}.media-form-primary{background:var(--dsw-alias-button-primary-fill,#4d6bfe);color:var(--dsw-alias-label-primary-inverted,#fff)!important;border-color:transparent}.media-form-primary:hover{opacity:.9}
           .media-error{margin-top:16px!important;color:var(--dsw-alias-label-danger,#c44);white-space:pre-wrap}
           .media-newapi{display:grid;gap:12px;margin-top:20px;padding:16px;border:1px solid var(--dsw-alias-settings-card-stroke,#e2e5eb);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-settings-card-fill,#f7f8fa)}.media-newapi h3{font-weight:600}.media-newapi p{color:var(--dsw-alias-label-secondary,#6b7280);font-size:13px}.media-newapi label{display:grid;gap:4px;color:var(--dsw-alias-label-secondary,#6b7280)}.media-newapi input{box-sizing:border-box;width:100%;padding:8px 10px;border:1px solid var(--dsw-alias-border-l3,#d9dce3);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1,transparent)}.media-newapi-actions{display:flex;gap:8px}
-          .media-newapi-account{gap:16px}.media-account-actions{display:flex;flex-wrap:wrap;gap:8px}.media-account-head,.media-account-balance{display:flex;align-items:center;gap:12px}.media-account-avatar{display:flex;align-items:center;justify-content:center;flex:none;width:48px;height:48px;border-radius:50%;background:var(--dsw-alias-interactive-bg-hover-accent,#e8edff);color:var(--dsw-alias-brand-text,#4263d9);font-size:20px;font-weight:600}.media-account-name{display:grid;gap:1px;flex:1;min-width:0;overflow-wrap:anywhere}.media-account-name strong{font-size:16px}.media-account-name span,.media-account-label,.media-account-updated{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280)}.media-account-balance{justify-content:space-between;border-top:1px solid var(--dsw-alias-settings-card-stroke,#e2e5eb);padding-top:14px}.media-account-balance>div{display:grid;gap:2px}.media-account-balance strong{font-size:21px;line-height:28px;font-variant-numeric:tabular-nums}.media-account-updated{font-size:11px}
+          .media-newapi-account{gap:10px}.media-account-main{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.media-account-avatar{display:flex;align-items:center;justify-content:center;flex:none;width:48px;height:48px;border-radius:50%;background:var(--dsw-alias-interactive-bg-hover-accent,#e8edff);color:var(--dsw-alias-brand-text,#4263d9);font-size:20px;font-weight:600}.media-account-name{display:grid;gap:1px;flex:1 1 125px;min-width:0;overflow-wrap:anywhere}.media-account-name strong{font-size:16px}.media-account-name span,.media-account-label,.media-account-updated{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280)}.media-account-balance{display:grid;gap:1px;min-width:115px}.media-account-balance strong{font-size:19px;line-height:26px;font-variant-numeric:tabular-nums}.media-account-updated{font-size:11px}.media-account-actions{display:flex;align-items:center;gap:4px}.media-account-icon{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:1px solid var(--dsw-alias-border-l3,#d9dce3);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1,transparent)}.media-account-icon:hover{background:var(--dsw-alias-interactive-bg-hover,#e9ebf0)}.media-account-icon:active{transform:translateY(1px)}
+
           @media(max-width:600px){.media-settings{padding:16px}.media-card-meta{grid-template-columns:1fr;gap:8px}.media-heading{align-items:flex-start}.media-section-description{max-width:28ch}}
         `),
         h('h2', null, 'deepImage'),
         h('p', { className: 'media-intro' }, '管理图片和视频服务商，选择用于自动绘图的默认服务商。'),
-        !editor && snapshot.status === 'ready' && h(NewApiLogin, { form, credentials, account: value.newApiAccount }),
+        snapshot.status === 'ready' && h('div', { hidden: !!editor }, h(NewApiLogin, { form, credentials, account: value.newApiAccount, onBusyChange: setAccountBusy })),
         !editor && snapshot.status === 'ready' && h('div', { className: 'media-tabs', role: 'tablist', 'aria-label': 'deepImage 页面' },
           ...(value.newApiAccount ? [['image', '绘图'], ['video', '视频'], ['settings', '设置']] : [['settings', '设置']]).map(([kind, label]) => h('button', {
             key: kind, id: `media-tab-${kind}`, type: 'button', className: 'media-tab', role: 'tab', 'aria-selected': shownKind === kind,

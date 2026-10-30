@@ -35,15 +35,22 @@ class NewApiService extends Service {
   async request(input) {
     if (this.ctx.invocation?.peer?.principal?.kind !== 'owner') throw new Error('New API connection is available only to the host owner.')
     const refresh = input.path === '/api/user/auth/refresh'
-    const allowed = new Set(['/api/user/login', '/api/user/login/verify', '/api/user/auth/refresh', '/api/user/self', '/api/status', '/api/pricing', '/api/token/search?keyword=deepImage&page_size=100', '/api/token/', '/v1/models'])
+    const logout = input.path === '/api/user/auth/logout'
+    const allowed = new Set(['/api/user/login', '/api/user/login/verify', '/api/user/auth/refresh', '/api/user/auth/logout', '/api/user/self', '/api/status', '/api/pricing', '/api/token/search?keyword=deepImage&page_size=100', '/api/token/', '/v1/models'])
     if (!allowed.has(input.path) && !/^\/api\/token\/[1-9]\d*\/key$/.test(input.path)) throw new Error('Unsupported New API request.')
-    const post = input.path === '/api/user/login' || input.path === '/api/user/login/verify' || refresh || input.path === '/api/token/' || /^\/api\/token\/[1-9]\d*\/key$/.test(input.path)
+    const post = input.path === '/api/user/login' || input.path === '/api/user/login/verify' || refresh || logout || input.path === '/api/token/' || /^\/api\/token\/[1-9]\d*\/key$/.test(input.path)
     if ((post && !input.body) || (!post && input.body !== null)) throw new Error('Invalid New API request method.')
-    if (refresh) {
+    if (refresh || logout) {
       const id = input.body?.userId
       if (!Number.isSafeInteger(id) || id <= 0 || Object.keys(input.body).length !== 1 || input.token) throw new Error('Invalid New API session request.')
       return this.withSessionLock(id, async () => {
         const stored = await this.ctx.credentials.resolve(credentialRef(`DEEPIMAGE_NEWAPI_SESSION_${id}`))
+        if (logout) {
+          if (stored?.value) await this.fetchNewApi(input, { refreshCookie: stored.value, expectedId: id })
+          await this.ctx.credentials.unset(credentialRef(`DEEPIMAGE_NEWAPI_SESSION_${id}`))
+          await this.ctx.credentials.unset(credentialRef(`DEEPIMAGE_NEWAPI_${id}`))
+          return { success: true }
+        }
         if (!stored?.value) throw new Error('未找到可恢复的登录会话，请重新登录。')
         return this.fetchNewApi(input, { refreshCookie: stored.value, expectedId: id })
       })
@@ -52,12 +59,14 @@ class NewApiService extends Service {
   }
   async fetchNewApi(input, { refreshCookie, expectedId } = {}) {
     const refresh = input.path === '/api/user/auth/refresh'
+    const logout = input.path === '/api/user/auth/logout'
     const post = input.body !== null
     const response = await fetch('https://token.aikna.cn' + input.path, {
       method: post ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(30000),
       headers: { Accept: 'application/json', ...(input.token ? { Authorization: `Bearer ${input.token}` } : {}), ...(post ? { 'Content-Type': 'application/json' } : {}), ...(refreshCookie ? { Cookie: `new_api_refresh=${refreshCookie}`, Origin: 'https://token.aikna.cn' } : {}) },
-      ...(post ? { body: JSON.stringify(refresh ? {} : input.body) } : {}),
+      ...(post ? { body: JSON.stringify(refresh || logout ? {} : input.body) } : {}),
     })
+    if (logout && (response.status === 401 || response.status === 403)) return { success: true }
     if (!response.ok) throw new Error(refresh && (response.status === 401 || response.status === 403) ? '登录会话已失效，请重新登录。' : `New API request failed (HTTP ${response.status}).`)
     const length = Number(response.headers.get('content-length'))
     if (Number.isFinite(length) && length > 4 * 1024 * 1024) { await response.body?.cancel(); throw new Error('New API response is too large.') }
@@ -70,6 +79,7 @@ class NewApiService extends Service {
       chunks.push(chunk)
     }
     const result = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    if (logout && result?.success === false) throw new Error(result.message || '退出登录失败，请重试。')
     const login = input.path === '/api/user/login' || input.path === '/api/user/login/verify'
     if ((login || refresh) && result?.success !== false && result?.data?.access_token) {
       const id = result.data.user?.id
@@ -155,8 +165,17 @@ export function apply(ctx, config) {
   ctx.inject(['settings'], (child) => {
     child.effect(() => child.settings.configure({ auto: false }, ctx.fiber))
   })
-  const imageProviders = () => indexProviders(config.imageProviders.get(), 'image')
-  const videoProviders = () => indexProviders(config.videoProviders.get(), 'video')
+  const availableProviders = (providers, kind) => {
+    const account = config.newApiAccount.get()
+    const activeId = String(account?.id || '')
+    return indexProviders(providers.filter(provider => {
+      const idOwner = /^newapi:(\d+):/.exec(provider.id)?.[1]
+      const credentialOwner = /^DEEPIMAGE_NEWAPI_(\d+)$/.exec(provider.apiKeyEnv)?.[1]
+      return (!idOwner || idOwner === activeId) && (!credentialOwner || credentialOwner === activeId)
+    }), kind)
+  }
+  const imageProviders = () => availableProviders(config.imageProviders.get(), 'image')
+  const videoProviders = () => availableProviders(config.videoProviders.get(), 'video')
   const currentTimeoutMs = (provider) => {
     if (Number.isInteger(provider.timeoutMs) && provider.timeoutMs > 0 && provider.timeoutMs <= 4_294_967_295) return provider.timeoutMs
     const raw = typeof config.timeoutMs?.get === 'function' ? config.timeoutMs.get() : config.timeoutMs
@@ -172,7 +191,8 @@ export function apply(ctx, config) {
     output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
     async execute() {
       const images = [...imageProviders().keys()].join(', ') || '(none)'
-      const defaultImage = config.defaultImageProvider.get() || '(not configured)'
+      const configuredDefault = config.defaultImageProvider.get()
+      const defaultImage = imageProviders().has(configuredDefault) ? configuredDefault : '(not configured)'
       const videos = [...videoProviders().keys()].join(', ') || '(none)'
       return `Image providers: ${images}\nDefault image provider: ${defaultImage}\nVideo providers: ${videos}`
     },
@@ -200,7 +220,8 @@ export function apply(ctx, config) {
       },
       async execute(args, exec) {
         const available = imageProviders()
-        const requested = args.provider || config.defaultImageProvider.get() || (available.size === 1 ? available.keys().next().value : '')
+        const configuredDefault = config.defaultImageProvider.get()
+        const requested = args.provider || (available.has(configuredDefault) ? configuredDefault : '') || (available.size === 1 ? available.keys().next().value : '')
         if (!requested) throw new Error('No default image provider is configured. Select one in deepImage settings.')
         const provider = requireProvider(available, requested, 'image')
         const body = makeImageBody(provider, args)
