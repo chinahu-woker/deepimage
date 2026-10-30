@@ -29,6 +29,17 @@
 - **灵活配置**：管理多个图片和视频服务商，通过高级配置适配不同的请求与响应格式。
 - **凭据管理**：通过 Harness 凭据服务或环境变量提供 API Key。
 
+## 桌面版安装器
+
+下载并解压安装器，打开后可选择开源版或 New API 公司版：
+
+- [下载 macOS 安装器](https://github.com/chinahu-woker/deepimage/raw/main/downloads/deepImage-installer-macOS.zip)
+- [下载 Windows 安装器](https://github.com/chinahu-woker/deepimage/raw/main/downloads/deepImage-installer-Windows.zip)
+
+安装前请先启动一次 DeepSeek Harness 桌面版，再完全退出。macOS 双击「安装 deepImage.app」；Windows 双击 `Install deepImage.cmd`。安装可能需要联网。
+
+**测试版说明：**macOS 安装器尚未经过 Apple 公证，Windows 安装器尚未签名，也尚未在 Windows 真机验证，系统可能阻止运行。安装步骤和构建说明见 [桌面安装器文档](https://github.com/chinahu-woker/deepimage/blob/newapi-login/installer/README.md)。
+
 ## 快速开始
 
 需要安装 DeepSeek Harness、Node.js 和 pnpm。当前开发环境验证的 Harness 版本为 `0.2.1-rc.2`；Harness 仍处于预览阶段，其他版本的插件 API 可能有所差异。
