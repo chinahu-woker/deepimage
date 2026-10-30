@@ -30,10 +30,7 @@ try {
     $form.Controls.Add($companyButton)
     [void]$form.ShowDialog()
     if (-not $form.Tag) { return }
-    $edition = $form.Tag
-    $packageName = if ($edition -eq 'open') { 'deepimage-open-source.tgz' } else { 'deepimage-newapi.tgz' }
-    $package = Join-Path $PSScriptRoot $packageName
-    if (-not (Test-Path -LiteralPath $package -PathType Leaf)) { throw '安装包不完整，请重新下载安装器。' }
+    $edition = if ($form.Tag -eq 'open') { 'open-source' } else { 'newapi' }
     $candidates = @(
         (Join-Path $env:LOCALAPPDATA 'Programs\DeepSeek Harness\DeepSeek Harness.exe'),
         (Join-Path $env:ProgramFiles 'DeepSeek Harness\DeepSeek Harness.exe')
@@ -53,25 +50,34 @@ try {
         $answer = [System.Windows.Forms.MessageBox]::Show('请从任务栏托盘完全退出 DeepSeek Harness，然后点击“确定”。', $title, 'OKCancel', 'Information')
         if ($answer -ne [System.Windows.Forms.DialogResult]::OK) { return }
     }
-    $answer = [System.Windows.Forms.MessageBox]::Show('准备安装 deepImage。安装可能需要联网下载依赖，请耐心等待。', $title, 'OKCancel', 'Information')
+    $answer = [System.Windows.Forms.MessageBox]::Show('准备联网下载并安装所选版本的最新插件，请耐心等待。', $title, 'OKCancel', 'Information')
     if ($answer -ne [System.Windows.Forms.DialogResult]::OK) { return }
-    $store = Join-Path $env:LOCALAPPDATA 'deepImage\installer-packages'
-    [void](New-Item -ItemType Directory -Force -Path $store)
-    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $package).Hash.ToLowerInvariant()
-    $permanent = Join-Path $store "$hash.tgz"
-    if (-not (Test-Path -LiteralPath $permanent)) { Copy-Item -LiteralPath $package -Destination $permanent }
     $working = New-Object System.Windows.Forms.Form
     $working.Text = $title
     $working.StartPosition = 'CenterScreen'
     $working.Size = New-Object System.Drawing.Size(420, 130)
     $working.ControlBox = $false
     $workingLabel = New-Object System.Windows.Forms.Label
-    $workingLabel.Text = '正在安装 deepImage，请不要关闭安装器…'
+    $workingLabel.Text = '正在下载并安装 deepImage，请不要关闭安装器…'
     $workingLabel.AutoSize = $true
     $workingLabel.Location = New-Object System.Drawing.Point(20, 30)
     $working.Controls.Add($workingLabel)
     $working.Show()
     [System.Windows.Forms.Application]::DoEvents()
+    $package = Join-Path ([System.IO.Path]::GetTempPath()) ("deepimage-" + [guid]::NewGuid().ToString('N') + '.tgz')
+    $previousNodeMode = $env:ELECTRON_RUN_AS_NODE
+    try {
+        $env:ELECTRON_RUN_AS_NODE = '1'
+        $downloadOutput = (& $app (Join-Path $PSScriptRoot 'download-latest.cjs') $edition $package 2>&1 | Out-String)
+        $downloadExitCode = $LASTEXITCODE
+    } finally { $env:ELECTRON_RUN_AS_NODE = $previousNodeMode }
+    if ($downloadExitCode -ne 0) { throw "下载最新插件失败，请检查网络后重试。`r`n`r`n$downloadOutput" }
+    $store = Join-Path $env:LOCALAPPDATA 'deepImage\installer-packages'
+    [void](New-Item -ItemType Directory -Force -Path $store)
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $package).Hash.ToLowerInvariant()
+    $permanent = Join-Path $store "$hash.tgz"
+    if (-not (Test-Path -LiteralPath $permanent)) { Copy-Item -LiteralPath $package -Destination $permanent }
+    elseif ((Get-FileHash -Algorithm SHA256 -LiteralPath $permanent).Hash.ToLowerInvariant() -ne $hash) { throw '已保存的插件包校验失败，请联系维护人员。' }
     $output = (& $cli plugin --profile desktop add $permanent 2>&1 | Out-String)
     $exitCode = $LASTEXITCODE
     $working.Close()
@@ -81,4 +87,6 @@ try {
 } catch {
     if ($working) { $working.Close() }
     Show-Message ("安装器遇到问题：`r`n" + $_.Exception.Message) 'Error'
+} finally {
+    if ($package) { Remove-Item -LiteralPath $package -Force -ErrorAction SilentlyContinue }
 }

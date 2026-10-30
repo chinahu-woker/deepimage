@@ -54,9 +54,9 @@ window.__ModuleLoader__.load({
         const list = remove ? [] : eligible.filter(item => item.supported_endpoint_types.includes(route.endpoint) && (route.endpoint !== 'openai-response' || !item.supported_endpoint_types.includes('openai')))
         if (list.length) {
           const seen = new Set()
-          const models = list.filter(item => !seen.has(item.model_name) && seen.add(item.model_name)).map(item => ({ id: item.model_name }))
+          const models = list.filter(item => !seen.has(item.model_name) && seen.add(item.model_name)).map(item => existing?.models?.find(model => model.id === item.model_name) || { id: item.model_name })
           count += models.length
-          ops.push({ op: 'set', path: ['providers', id], value: { displayName: route.displayName, apiKeyEnv: `DEEPIMAGE_NEWAPI_${userId}`, baseURL: `${newApiBase}/v1`, api: route.api, defaultContextWindow: 32768, defaultMaxTokens: 4096, models } })
+          ops.push({ op: 'set', path: ['providers', id], value: { displayName: route.displayName, defaultContextWindow: 32768, defaultMaxTokens: 4096, ...existing, apiKeyEnv: `DEEPIMAGE_NEWAPI_${userId}`, baseURL: `${newApiBase}/v1`, api: route.api, models } })
         } else if (existing) ops.push({ op: 'unset', path: ['providers', id] })
       }
       if (ops.length && !await modelForm.mutate(ops, snapshot.revision)) throw new Error('对话模型配置未保存，可能已被其他页面修改，请重试。')
@@ -92,17 +92,18 @@ window.__ModuleLoader__.load({
       return { userId, token, key, eligible }
     }
 
-    async function configureNewApi(bundle, form, credentials, modelForm) {
+    async function configureNewApi(bundle, form, credentials, modelForm, expectedAccountId, accountInfo) {
       const { userId, token, key, eligible } = await loadNewApiCatalog(bundle)
       const ref = `DEEPIMAGE_NEWAPI_${userId}`
       const prefix = `newapi:${userId}:`
       const imageModels = eligible.filter(item => item.supported_endpoint_types.includes('image-generation'))
       const videoModels = eligible.filter(item => item.supported_endpoint_types.includes('openai-video'))
       const chatModels = eligible.filter(item => item.supported_endpoint_types.includes('openai') || item.supported_endpoint_types.includes('openai-response'))
-      if (!imageModels.length && !videoModels.length && !chatModels.length) throw new Error('该密钥没有可识别的兼容对话、图片或视频模型。请检查 New API 的模型和分组配置。')
+      if (!imageModels.length && !videoModels.length && !chatModels.length && !expectedAccountId) throw new Error('该密钥没有可识别的兼容对话、图片或视频模型。请检查 New API 的模型和分组配置。')
       const snapshot = form.getSnapshot()
       if (snapshot.status !== 'ready' || !snapshot.writable) throw new Error('当前配置不可写，请稍后重试。')
       const current = snapshot.value || {}
+      if (expectedAccountId && current.newApiAccount?.id !== expectedAccountId) throw new Error('当前账户已更换，请重新同步。')
       const imageProviders = (current.imageProviders || []).filter(item => !item.id.startsWith(prefix))
       const videoProviders = (current.videoProviders || []).filter(item => !item.id.startsWith(prefix))
       for (const item of imageModels) {
@@ -122,7 +123,9 @@ window.__ModuleLoader__.load({
       const ownerId = oldDefaultProvider && /^newapi:(\d+):/.exec(oldDefaultProvider.id)?.[1]
       const credentialOwner = oldDefaultProvider && /^DEEPIMAGE_NEWAPI_(\d+)$/.exec(oldDefaultProvider.apiKeyEnv)?.[1]
       const defaultImage = oldDefaultProvider && (!ownerId || ownerId === String(userId)) && (!credentialOwner || credentialOwner === String(userId)) ? oldDefault : imageModels.length ? `${prefix}image:${imageModels[0].model_name}` : ''
-      const [selfResult, statusResult] = await Promise.allSettled([newApiRequest('/api/user/self', { token }), newApiRequest('/api/status')])
+      const [selfResult, statusResult] = accountInfo
+        ? [{ status: 'fulfilled', value: { data: accountInfo.user } }, { status: 'fulfilled', value: { data: accountInfo.status } }]
+        : await Promise.allSettled([newApiRequest('/api/user/self', { token }), newApiRequest('/api/status')])
       const self = selfResult.status === 'fulfilled' && selfResult.value.data?.id === userId ? selfResult.value.data : bundle.user
       const modelSnapshot = modelForm.getSnapshot()
       const oldAccount = current.newApiAccount
@@ -238,9 +241,9 @@ window.__ModuleLoader__.load({
           })
         } catch (error) { setMessage(error.message || '连接失败，请稍后重试。') } finally { busyRef.current = false; setAccountBusy(false) }
       }
-      const refresh = async (forceSync = false) => {
+      const refresh = async (mode = 'restore') => {
         if (busyRef.current) return
-        busyRef.current = true; setAccountBusy(true); setMessage('')
+        busyRef.current = true; setAccountBusy(true); setMessage(mode === 'sync' ? '正在同步模型…' : mode === 'balance' ? '正在刷新余额…' : '')
         try {
           await withNewApiLock(async () => {
           if (!newApiSession || newApiSession.id !== account.id || !(newApiSession.expiresAt > Date.now() + 30000)) {
@@ -257,15 +260,18 @@ window.__ModuleLoader__.load({
           const ok = await form.mutate([{ op: 'set', path: ['newApiAccount'], value: { ...newApiAccount(self.data, status.data), chatSyncVersion: snapshot.value.newApiAccount.chatSyncVersion || 0, chatRoutesManaged: !!snapshot.value.newApiAccount.chatRoutesManaged } }], snapshot.revision)
           if (!ok) throw new Error('余额未更新，请重试。')
           setSessionExpired(false)
-          if (forceSync || account.chatSyncVersion !== 1) {
+          if (mode === 'sync') {
+            const result = await configureNewApi({ access_token: activeSession.token, access_expires_at: activeSession.expiresAt / 1000, user: self.data }, form, credentials, modelForm, account.id, { user: self.data, status: status.data })
+            setMessage(result.chatError ? `图片和视频模型已更新；对话模型同步失败：${result.chatError}` : `模型同步完成：${result.chats} 个对话模型、${result.images} 个图片模型、${result.videos} 个视频模型。`)
+          } else if (account.chatSyncVersion !== 1) {
             const chats = await syncExistingChat({ access_token: activeSession.token, access_expires_at: activeSession.expiresAt / 1000, user: self.data }, form, credentials, modelForm)
             setMessage(`已同步 ${chats} 个对话模型。`)
-          }
+          } else if (mode === 'balance') setMessage('余额已更新。')
           })
         } catch (error) {
           if (/登录会话.*(?:重新登录|失效|无效)/.test(error.message || '')) setSessionExpired(true)
           else setSessionExpired(null)
-          setMessage(error.message || '刷新余额失败，请稍后重试。')
+          setMessage(error.message || (mode === 'sync' ? '模型同步失败，请稍后重试。' : '刷新余额失败，请稍后重试。'))
         } finally { busyRef.current = false; setAccountBusy(false) }
       }
       const logout = async () => {
@@ -315,7 +321,8 @@ window.__ModuleLoader__.load({
             h('div', { className: 'media-account-name' }, h('strong', null, name)),
             h('div', { className: 'media-account-balance' }, h('span', { className: 'media-account-label' }, '可用余额'), h('strong', null, formatNewApiBalance(account)), updated && h('span', { className: 'media-account-updated' }, `更新于 ${updated}`)),
             h('div', { className: 'media-account-actions' },
-              icon('刷新余额并同步模型', ['M20 7v5h-5', 'M4 17v-5h5', 'M5.6 9a7 7 0 0 1 11.9-2L20 12', 'M4 12l2.5 5a7 7 0 0 0 11.9-2'], () => refresh(true)),
+              icon('刷新余额', ['M20 7v5h-5', 'M4 17v-5h5', 'M5.6 9a7 7 0 0 1 11.9-2L20 12', 'M4 12l2.5 5a7 7 0 0 0 11.9-2'], () => refresh('balance')),
+              icon('同步模型', ['M4 7h10', 'M11 4l3 3-3 3', 'M20 17H10', 'M13 14l-3 3 3 3', 'M18 4v6', 'M15 7h6', 'M4 14v6'], () => refresh('sync')),
               icon('重新登录', ['M20 11a8 8 0 1 0-2.5 5.8', 'M20 4v7h-7', 'M12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6', 'M7.8 18a5 5 0 0 1 8.4 0'], () => { setEditing(true); setMessage('') }),
               icon('退出登录', ['M10 17l5-5-5-5', 'M15 12H3', 'M12 3h6a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3h-6'], logout))),
           message && h('p', { role: 'status' }, message))
@@ -425,6 +432,49 @@ window.__ModuleLoader__.load({
       }, [attachment, loadImage])
       return url && !failed ? h('img', { className: 'deepimage-result-image', src: url, alt: '生成的图片', onError: () => setFailed(true) })
         : h('p', null, failed ? '图片加载失败，请查看工具详情。' : '正在加载图片…')
+    }
+
+    function GeneratedUrlImage({ url }) {
+      const [failed, setFailed] = React.useState(false)
+      React.useEffect(() => { setFailed(false) }, [url])
+      return failed ? h('p', null, '图片链接已失效或无法访问，请查看工具详情。')
+        : h('img', { src: url, alt: '生成的图片', loading: 'lazy', onError: () => setFailed(true) })
+    }
+
+    function generatedImages(calls) {
+      const images = []
+      const visit = call => {
+        if (!call) return
+        const imageResult = call.name === 'generate_image' || (!call.name && (call.content || []).some(part => part?.type === 'text' && typeof part.text === 'string' && /^Image generated with .+\./.test(part.text)))
+        if (call.kind === 'tool-result' && imageResult && !call.isError) {
+          const attachments = (call.content || []).filter(part => part?.type === 'image' && part.attachment).map(part => part.attachment)
+          if (attachments.length) attachments.forEach(attachment => images.push({ attachment, key: `${call.callId}:${attachment.attachmentId}` }))
+          else for (const part of call.content || []) {
+            const match = part?.type === 'text' && typeof part.text === 'string' && /^Image URL: (https?:\/\/\S+)$/m.exec(part.text)
+            if (match) images.push({ url: match[1], key: `${call.callId}:${match[1]}` })
+          }
+        }
+        for (const child of call.subCalls || []) visit(child)
+      }
+      for (const entry of calls) visit(entry.root)
+      return images
+    }
+
+    function TurnGeneratedImages({ turn, sessionId, useChat, uiConversation }) {
+      const nodes = useChat(snapshot => snapshot.nodes)
+      const source = React.useMemo(() => nodes.turnDataSource(turn.turn, 'tool-call'), [nodes, turn.turn])
+      const calls = React.useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
+      const loadImage = React.useMemo(() => Object.assign(
+        attachment => uiConversation.imageUrl(sessionId, attachment),
+        { peek: attachment => uiConversation.peekImageUrl(sessionId, attachment) },
+      ), [uiConversation, sessionId])
+      const images = generatedImages(calls)
+      if (!images.length) return null
+      return h('div', { className: 'deepimage-turn-images', 'aria-label': '生成的图片' },
+        h('style', null, '.deepimage-turn-images{display:flex;flex-wrap:wrap;gap:12px}.deepimage-turn-images img{display:block;max-width:min(356px,100%);max-height:500px;width:auto;height:auto;border-radius:12px}.deepimage-turn-images p{color:var(--dsw-alias-label-secondary,#6b7280)}'),
+        ...images.map(image => image.attachment
+          ? h(GeneratedImage, { key: image.key, attachment: image.attachment, loadImage })
+          : h(GeneratedUrlImage, { key: image.key, url: image.url })))
     }
 
     function ImageToolView({ phase, block, loadImage, inspect }) {
@@ -608,9 +658,9 @@ window.__ModuleLoader__.load({
           .media-form-actions{display:flex;justify-content:flex-end;gap:8px}.media-form-primary{background:var(--dsw-alias-button-primary-fill,#4d6bfe);color:var(--dsw-alias-label-primary-inverted,#fff)!important;border-color:transparent}.media-form-primary:hover{opacity:.9}
           .media-error{margin-top:16px!important;color:var(--dsw-alias-label-danger,#c44);white-space:pre-wrap}
           .media-newapi{display:grid;gap:12px;margin-top:20px;padding:16px;border:1px solid var(--dsw-alias-settings-card-stroke,#e2e5eb);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-settings-card-fill,#f7f8fa)}.media-newapi h3{font-weight:600}.media-newapi p{color:var(--dsw-alias-label-secondary,#6b7280);font-size:13px}.media-newapi label{display:grid;gap:4px;color:var(--dsw-alias-label-secondary,#6b7280)}.media-newapi input{box-sizing:border-box;width:100%;padding:8px 10px;border:1px solid var(--dsw-alias-border-l3,#d9dce3);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1,transparent)}.media-newapi-actions{display:flex;gap:8px}
-          .media-newapi-account{gap:10px;position:relative}.media-account-main{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding-right:122px}.media-account-avatar{position:relative;display:flex;align-items:center;justify-content:center;flex:none;width:48px;height:48px;border-radius:50%;background:var(--dsw-alias-interactive-bg-hover-accent,#e8edff);color:var(--dsw-alias-brand-text,#4263d9);font-size:20px;font-weight:600}.media-account-indicator{position:absolute;right:-1px;bottom:-1px;width:12px;height:12px;box-sizing:border-box;border:2px solid var(--dsw-alias-settings-card-fill,#fff);border-radius:50%;background:#a0a6b2}.media-account-indicator.is-connected{background:#22b66a}.media-account-indicator.is-expired{background:#e38a38}.media-account-name{display:grid;gap:1px;flex:1 1 125px;min-width:0;overflow-wrap:anywhere}.media-account-name strong{font-size:16px}.media-account-name span,.media-account-label,.media-account-updated{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280)}.media-account-balance{display:grid;gap:1px;min-width:115px}.media-account-balance strong{font-size:19px;line-height:26px;font-variant-numeric:tabular-nums}.media-account-updated{font-size:11px}.media-account-actions{position:absolute;right:16px;top:16px;display:flex;align-items:center;gap:4px}.media-account-icon{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:1px solid var(--dsw-alias-border-l3,#d9dce3);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1,transparent)}.media-account-icon:hover{background:var(--dsw-alias-interactive-bg-hover,#e9ebf0)}.media-account-icon:active{transform:translateY(1px)}
+          .media-newapi-account{gap:10px;position:relative}.media-account-main{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding-right:160px}.media-account-avatar{position:relative;display:flex;align-items:center;justify-content:center;flex:none;width:48px;height:48px;border-radius:50%;background:var(--dsw-alias-interactive-bg-hover-accent,#e8edff);color:var(--dsw-alias-brand-text,#4263d9);font-size:20px;font-weight:600}.media-account-indicator{position:absolute;right:-1px;bottom:-1px;width:12px;height:12px;box-sizing:border-box;border:2px solid var(--dsw-alias-settings-card-fill,#fff);border-radius:50%;background:#a0a6b2}.media-account-indicator.is-connected{background:#22b66a}.media-account-indicator.is-expired{background:#e38a38}.media-account-name{display:grid;gap:1px;flex:1 1 125px;min-width:0;overflow-wrap:anywhere}.media-account-name strong{font-size:16px}.media-account-name span,.media-account-label,.media-account-updated{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280)}.media-account-balance{display:grid;gap:1px;min-width:115px}.media-account-balance strong{font-size:19px;line-height:26px;font-variant-numeric:tabular-nums}.media-account-updated{font-size:11px}.media-account-actions{position:absolute;right:16px;top:16px;display:flex;align-items:center;gap:4px}.media-account-icon{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:1px solid var(--dsw-alias-border-l3,#d9dce3);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1,transparent)}.media-account-icon:hover{background:var(--dsw-alias-interactive-bg-hover,#e9ebf0)}.media-account-icon:active{transform:translateY(1px)}
 
-          @media(max-width:600px){.media-settings{padding:16px}.media-card-meta{grid-template-columns:1fr;gap:8px}.media-heading{align-items:flex-start}.media-section-description{max-width:28ch}}
+          @media(max-width:600px){.media-settings{padding:16px}.media-card-meta{grid-template-columns:1fr;gap:8px}.media-heading{align-items:flex-start}.media-section-description{max-width:28ch}.media-account-main{padding-right:0}.media-account-actions{position:static;flex-basis:100%;justify-content:flex-end}}
         `),
         h('h2', null, 'deepImage'),
         h('p', { className: 'media-intro' }, '管理图片和视频服务商，选择用于自动绘图的默认服务商。'),
@@ -689,6 +739,12 @@ window.__ModuleLoader__.load({
         ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
           name: 'tool.call.toolview', key: 'generate_image',
         }, ImageToolView))
+        ctx.inject(['uiConversation'], child => {
+          child.slots.inject('conversation.chat.turnTail', () => child.slots.register({
+            name: 'conversation.chat.turnTail', id: 'deepimage-generated-images',
+            inject: () => ({ uiConversation: child.uiConversation }),
+          }, TurnGeneratedImages))
+        })
       },
     }
   },

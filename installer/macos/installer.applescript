@@ -2,9 +2,9 @@ on run
   try
     set selectedVersion to button returned of (display dialog "选择要安装的 deepImage 版本：" & return & return & "开源版：自行配置图片和视频服务商。" & return & "公司版：登录 AIKNA 后自动配置兼容模型。" buttons {"取消", "开源版", "公司版"} default button "公司版" cancel button "取消" with title "安装 deepImage")
     if selectedVersion is "开源版" then
-      set packageName to "deepimage-open-source.tgz"
+      set edition to "open-source"
     else
-      set packageName to "deepimage-newapi.tgz"
+      set edition to "newapi"
     end if
     set appPath to "/Applications/DeepSeek Harness.app"
     try
@@ -30,13 +30,12 @@ on run
     end repeat
     set resourcesPath to (POSIX path of (path to me)) & "/Contents/Resources/"
     set installScript to resourcesPath & "install.sh"
-    set packagePath to resourcesPath & packageName
-    display dialog "准备安装" & selectedVersion & "。安装可能需要联网下载依赖，请耐心等待。" buttons {"取消", "开始安装"} default button "开始安装" cancel button "取消" with title "安装 deepImage"
+    display dialog "准备联网下载并安装" & selectedVersion & "的最新版本，请耐心等待。" buttons {"取消", "开始安装"} default button "开始安装" cancel button "取消" with title "安装 deepImage"
     set progress description to "正在安装 deepImage…"
     set progress additional description to "请不要关闭安装器。"
     set progress total steps to 0
     try
-      do shell script quoted form of installScript & " " & quoted form of appPath & " " & quoted form of packagePath & " 2>&1"
+      do shell script quoted form of installScript & " " & quoted form of appPath & " " & quoted form of edition & " 2>&1"
     on error errorMessage number errorNumber
       set progress total steps to 0
       display dialog "安装未完成。请确认已打开过桌面版并完全退出，然后检查网络及应用版本。" & return & return & errorMessage buttons {"好"} default button "好" with title "安装 deepImage" with icon stop
